@@ -1,0 +1,10 @@
+[Unit]
+Description=PWL Core Service
+After=ModemManager.service
+
+[Service]
+ExecStart=/opt/pwl/pwl-core/pwl_core
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

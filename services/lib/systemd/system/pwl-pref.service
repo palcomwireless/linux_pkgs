@@ -1,0 +1,10 @@
+[Unit]
+Description=PWL Preference Service
+After=ModemManager.service pwl-core.service
+
+[Service]
+ExecStart=/opt/pwl/pwl-pref/pwl_pref
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

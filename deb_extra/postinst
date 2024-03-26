@@ -1,0 +1,35 @@
+#!/bin/bash
+
+set -e
+
+echo "pwl utility installation completed"
+
+case "$1" in
+    configure)
+        # Enable & start pwl services
+        path=/lib/systemd/system/
+        if [ -f ${path}pwl-core.service ] && [ -f ${path}pwl-fwupdate.service ] && [ -f ${path}pwl-madpt.service ] && [ -f ${path}pwl-pref.service ]; then
+            systemctl enable pwl-core.service pwl-fwupdate.service pwl-madpt.service pwl-pref.service
+            systemctl start pwl-core.service pwl-fwupdate.service pwl-madpt.service pwl-pref.service
+
+            # Copy pwl fcc-unlock files to Modem Manager
+            if [ -d "/usr/lib/x86_64-linux-gnu/ModemManager/" ]; then
+                mmpath=/usr/lib/x86_64-linux-gnu/ModemManager/
+            else
+                mmpath=/usr/lib64/ModemManager/
+            fi
+            cp -raf /opt/pwl/pwl-unlock/fcc-unlock.d ${mmpath}
+            rm -rf /opt/pwl/pwl-unlock/fcc-unlock.d
+            chown -R root:root ${mmpath}fcc-unlock.d
+            chmod 755 -R ${mmpath}fcc-unlock.d
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

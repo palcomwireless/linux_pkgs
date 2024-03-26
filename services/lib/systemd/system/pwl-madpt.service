@@ -1,0 +1,10 @@
+[Unit]
+Description=PWL Module Adapter Service
+After=ModemManager.service pwl-pref.service
+
+[Service]
+ExecStart=/opt/pwl/pwl-madpt/pwl_madpt
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# SPDX-License-Identifier: CC0-1.0
+# 2024 Chris Wu <chris.wu@palcomwireless.com>
+#
+# PWL DW5826e FCC unlock operation
+#
+
+/opt/pwl/pwl-unlock/pwl_unlock
+exit 0

@@ -1,0 +1,35 @@
+#!/bin/bash
+
+set -e
+
+echo "pwl utility preparing for removal..."
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Stop pwl services
+        path=/lib/systemd/system/
+        if [ -f ${path}pwl-core.service ] && [ -f ${path}pwl-fwupdate.service ] && [ -f ${path}pwl-madpt.service ] && [ -f ${path}pwl-pref.service ]; then
+            systemctl stop pwl-core.service pwl-fwupdate.service pwl-madpt.service pwl-pref.service
+        fi
+
+        # remove fcc-unlock files
+        if [ -d "/usr/lib/x86_64-linux-gnu/ModemManager/" ]; then
+            fcc_unlock=/usr/lib/x86_64-linux-gnu/ModemManager/fcc-unlock.d
+        else
+            fcc_unlock=/usr/lib64/ModemManager/fcc-unlock.d
+        fi
+        if [ -d ${fcc_unlock} ]; then
+            rm -rf ${fcc_unlock}
+        fi
+        ;;
+
+    failed-upgrade)
+        ;;
+
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 0
+        ;;
+esac
+
+exit 0

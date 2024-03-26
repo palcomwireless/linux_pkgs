@@ -1,0 +1,10 @@
+[Unit]
+Description=PWL Firmware Update Service
+After=ModemManager.service pwl-madpt.service
+
+[Service]
+ExecStart=/opt/pwl/pwl-fwupdate/pwl_fwupdate
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

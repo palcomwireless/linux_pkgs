@@ -1,0 +1,56 @@
+#!/bin/bash
+
+root_dir=$(dirname "$0")/..
+build_dir=${root_dir}/build
+release_dir=${build_dir}/release
+dpkg_dir=${release_dir}/dpkg
+services_dir=${dpkg_dir}/opt/pwl
+
+vidpid_list=('413c:8217' '413c:8218' '413c:8219')
+
+function copy_files_to_release()
+{
+    # copy service files
+    mkdir -p ${dpkg_dir}/lib/systemd/
+    cp -raf ${root_dir}/services/lib/systemd/system/ ${dpkg_dir}/lib/systemd/
+
+    # copy core service files
+    mkdir -p ${services_dir}/pwl-core/
+    cp -raf ${build_dir}/pwl-core/pwl_core ${services_dir}/pwl-core/pwl_core
+    mkdir -p ${dpkg_dir}/usr/share/dbus-1/system.d/
+    cp -raf ${root_dir}/gdbus/com.pwl.core.conf ${dpkg_dir}/usr/share/dbus-1/system.d/
+
+    # copy madpt service files
+    mkdir -p ${services_dir}/pwl-madpt/
+    cp -raf ${build_dir}/pwl-madpt/pwl_madpt ${services_dir}/pwl-madpt/pwl_madpt
+
+    # copy fwupdate service files
+    mkdir -p ${services_dir}/pwl-fwupdate/
+    cp -raf ${build_dir}/pwl-fwupdate/pwl_fwupdate ${services_dir}/pwl-fwupdate/pwl_fwupdate
+
+    # copy pref service files
+    mkdir -p ${services_dir}/pwl-pref/
+    cp -raf ${build_dir}/pwl-pref/pwl_pref ${services_dir}/pwl-pref/pwl_pref
+
+    # copy unlock service files
+    mkdir -p ${services_dir}/pwl-unlock/fcc-unlock.d
+    cp -raf ${root_dir}/pwl-unlock/pwl_unlock ${services_dir}/pwl-unlock/pwl_unlock
+    for vidpid in ${vidpid_list[@]}; do
+        cp ${root_dir}/pwl-unlock/fcc-unlock.d/413c ${services_dir}/pwl-unlock/fcc-unlock.d/$vidpid
+    done
+}
+
+function create_release()
+{
+    echo "install started"
+
+    if [ -d "${release_dir}" ]; then
+        rm -rf ${release_dir}
+    fi
+
+    copy_files_to_release
+
+    echo "install completed"
+}
+
+create_release
