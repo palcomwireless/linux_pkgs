@@ -133,7 +133,7 @@ void print_message_info(msg_buffer_t* message) {
                       PWL_MQ_PATH(message->sender_id),
                       message->pwl_cid, cid_name[message->pwl_cid],
                       cid_status_name[message->status],
-                      message->response);
+                      (message->status == PWL_CID_STATUS_NONE) ? "" : message->response);
     } else {
         PWL_LOG_DEBUG("Msg recv from %s for cid (%d) %s, status %s",
                       PWL_MQ_PATH(message->sender_id),
@@ -174,12 +174,12 @@ gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size) {
 #define PWL_CMD_SET     "mbimcli -d %s -p --compal-set-at-command=\"%s\""
 
 gboolean pwl_set_command(const gchar *command, gchar **response) {
-    if (DEBUG) PWL_LOG_DEBUG("Set Command %s", command);
+    if (DEBUG) PWL_LOG_DEBUG("Set mbim command: %s", command);
 
     gchar port[20];
     memset(port, 0, sizeof(port));
     if (!pwl_find_mbim_port(port, sizeof(port))) {
-        PWL_LOG_ERR("find mbim port fail!");
+        PWL_LOG_ERR("pwl find mbim port fail!");
         return FALSE;
     }
 
@@ -200,7 +200,7 @@ gboolean pwl_set_command(const gchar *command, gchar **response) {
     memset(line, 0, sizeof(line));
 
     while (fgets(line, sizeof(line), fp) != NULL) {
-        if (DEBUG) PWL_LOG_DEBUG("query resp: %s", line);
+        //if (DEBUG) PWL_LOG_DEBUG("query resp: %s", line);
         strcat(buff, line);
     }
     pclose(fp);
@@ -220,4 +220,22 @@ gboolean pwl_set_command(const gchar *command, gchar **response) {
     }
 
     return TRUE;
+}
+
+gboolean pwl_set_command_available() {
+    gboolean available = FALSE;
+
+    gchar *response = NULL;
+    if (pwl_set_command("AT", &response)) {
+        if (response != NULL && strstr(response, "OK") != NULL) {
+            available = TRUE;
+        }
+    } else {
+        return available;
+    }
+    if (response) {
+        free(response);
+    }
+
+    return available;
 }
