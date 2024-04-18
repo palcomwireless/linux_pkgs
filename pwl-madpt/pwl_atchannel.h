@@ -15,22 +15,16 @@
  * along with this program; if not, see <http://www.gnu.org/licenses>.
  */
 
-#ifndef __PWL_MADPT_H__
-#define __PWL_MADPT_H__
+#ifndef __PWL_ATCHANNEL_H__
+#define __PWL_ATCHANNEL_H__
 
-#include "CoreGdbusGenerated.h"
+#include <glib.h>
 
-#define MADPT_FORCE_MBIMCLI    0
+#include "libmbim-glib.h"
+#include "log.h"
 
-#define RET_SIGNAL_HANDLE_SIZE 3
-#define PWL_MBIM_OPEN_WAIT_MAX 3
-#define PWL_MBIM_ERR_MAX       2
-
-#define OEM_PRI_UPDATE_START     0
-#define OEM_PPI_UPDATE_INIT      1   // waiting for modem initialize the RF NV item
-#define OEM_PRI_UPDATE_RESET     2   // Reset module
-#define OEM_PRI_UPDATE_NORESET   3   // Nothing
-
-void restart();
+gboolean pwl_atchannel_find_at_port();
+gboolean pwl_atchannel_at_req(const gchar *command, gchar **response);
+gboolean pwl_atchannel_at_port_wait();
 
 #endif
