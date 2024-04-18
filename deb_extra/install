@@ -38,6 +38,10 @@ function copy_files_to_release()
     for vidpid in ${vidpid_list[@]}; do
         cp ${root_dir}/pwl-unlock/fcc-unlock.d/413c ${services_dir}/pwl-unlock/fcc-unlock.d/$vidpid
     done
+
+    # copy udev for mm at port ignore
+    mkdir -p ${dpkg_dir}/usr/lib/udev/rules.d/
+    cp -raf ${root_dir}/deb_extra/76-pwl.mm-port.rules ${dpkg_dir}/usr/lib/udev/rules.d/
 }
 
 function create_release()

@@ -1,0 +1,12 @@
+ACTION!="add|change|move|bind", GOTO="mm_pwl_port_types_end"
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="413c", GOTO="mm_pwl_port_types"
+GOTO="mm_pwl_port_types_end"
+
+LABEL="mm_pwl_port_types"
+SUBSYSTEMS=="usb", ATTRS{bInterfaceNumber}=="?*", ENV{.MM_USBIFNUM}="$attr{bInterfaceNumber}"
+
+ATTRS{idVendor}=="413c", ATTRS{idProduct}=="8217", SUBSYSTEM=="tty", ENV{.MM_USBIFNUM}=="02", ENV{ID_MM_PORT_IGNORE}="1"
+ATTRS{idVendor}=="413c", ATTRS{idProduct}=="8218", SUBSYSTEM=="tty", ENV{.MM_USBIFNUM}=="02", ENV{ID_MM_PORT_IGNORE}="1"
+ATTRS{idVendor}=="413c", ATTRS{idProduct}=="8219", SUBSYSTEM=="tty", ENV{.MM_USBIFNUM}=="02", ENV{ID_MM_PORT_IGNORE}="1"
+
+LABEL="mm_pwl_port_types_end"
