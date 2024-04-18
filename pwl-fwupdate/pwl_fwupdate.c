@@ -511,9 +511,16 @@ void* msg_queue_thread_func() {
                 break;
             case PWL_CID_GET_AP_VER:
                 if (strlen(message.response) > 3) {
-                    strcpy(g_current_fw_ver, message.response);
-                    PWL_LOG_DEBUG("AP VER: %s", g_current_fw_ver);
-                    g_is_get_fw_ver = TRUE;
+                    // TODO: Find a good way to detect if correct AP version
+                    if (strncmp(message.response, "00.", 3) == 0) {
+                        strcpy(g_current_fw_ver, message.response);
+                        PWL_LOG_DEBUG("AP VER: %s", g_current_fw_ver);
+                        g_is_get_fw_ver = TRUE;
+                    } else {
+                        PWL_LOG_ERR("AP VER not match");
+                        g_is_get_fw_ver = FALSE;
+                    }
+
                 } else {
                     PWL_LOG_ERR("AP VER Error");
                     g_is_get_fw_ver = FALSE;
@@ -2154,6 +2161,7 @@ int start_udpate_process()
 {
     // Init progress dialog
     g_progress_percent = 0;
+    g_is_get_fw_ver = FALSE;
 
     // Check AP version before download, TEMP
     while (!g_is_get_fw_ver)
