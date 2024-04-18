@@ -47,7 +47,7 @@
 #else
 #define PWL_LOG_DEBUG(format, ...)      g_print(format "\n", ## __VA_ARGS__)
 #define PWL_LOG_INFO(format, ...)       g_print(format "\n", ## __VA_ARGS__)
-#define PWL_LOG_ERR(format, ...)        g_print(format "\n", ## __VA_ARGS__)
+#define PWL_LOG_ERR(format, ...)        g_printerr(format "\n", ## __VA_ARGS__)
 #endif
 #endif
 

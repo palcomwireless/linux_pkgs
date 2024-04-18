@@ -89,6 +89,10 @@ typedef enum {
     PWL_CID_SET_OEM_PRI_VERSION,
     PWL_CID_DEL_TUNE_CODE,
     PWL_CID_GET_CRSM,
+    PWL_CID_AT_UCOMP,
+    PWL_CID_RESET,
+    PWL_CID_GET_OEM_PRI_INFO,
+    PWL_CID_MADPT_RESTART,
     PLW_CID_MAX_MADPT,
     PWL_CID_MAX
 } pwl_cid_t;
@@ -101,6 +105,7 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_CARRIER_VER] = "GET_CARRIER_VER",
     [PWL_CID_GET_OEM_VER] = "GET_OEM_VER",
     [PWL_CID_UPDATE_FW_VER] = "UPDATE_FW_VER",
+    [PWL_CID_GET_SIM_CARRIER] = "GET_SIM_CARRIER",
     [PWL_CID_GET_CIMI] = "GET_CIMI",
     [PWL_CID_GET_ATE] = "GET_ATE",
     [PWL_CID_GET_ATI] = "GET_ATI",
@@ -110,10 +115,14 @@ static const gchar * const cid_name[] = {
     [PWL_CID_SWITCH_TO_FASTBOOT] = "SWITCH_TO_FASTBOOT",
     [PWL_CID_CHECK_OEM_PRI_VERSION] = "CHECK_OEM_PRI_VERSION",
     [PWL_CID_GET_PREF_CARRIER] = "GET_PREF_CARRIER",
-    [PWL_CID_SET_PREF_CARRIER] = "PWL_CID_SET_PREF_CARRIER",
-    [PWL_CID_SET_OEM_PRI_VERSION] = "PWL_CID_SET_OEM_PRI_VERSION",
+    [PWL_CID_SET_PREF_CARRIER] = "SET_PREF_CARRIER",
+    [PWL_CID_SET_OEM_PRI_VERSION] = "SET_OEM_PRI_VERSION",
     [PWL_CID_DEL_TUNE_CODE] = "DEL_TUNE_CODE",
-    [PWL_CID_GET_CRSM] = "PWL_CID_GET_CRSM",
+    [PWL_CID_GET_CRSM] = "GET_CRSM",
+    [PWL_CID_AT_UCOMP] = "AT_UCOMP",
+    [PWL_CID_RESET] = "RESET",
+    [PWL_CID_GET_OEM_PRI_INFO] = "PWL_CID_GET_OEM_PRI_INFO",
+    [PWL_CID_MADPT_RESTART] = "MADPT_RESTART",
 };
 
 typedef enum {
@@ -139,6 +148,15 @@ typedef struct {
     char                content[PWL_MQ_MAX_CONTENT_LEN];
 } msg_buffer_t;
 
+typedef enum {
+    PWL_AT_INTF_NONE,
+    PWL_AT_OVER_MBIM_CONTROL_MSG,
+    PWL_AT_OVER_MBIM_CLI,
+    PWL_AT_OVER_MBIM_API,
+    PWL_AT_CHANNEL
+} pwl_at_intf_t;
+
+
 gboolean pwl_discard_old_messages(const gchar *path);
 gboolean pwl_module_usb_id_exist(gchar *usbid);
 gboolean cond_wait(pthread_mutex_t *mutex, pthread_cond_t *cond, gint wait_time);
@@ -146,5 +164,6 @@ void send_message_reply(uint32_t cid, uint32_t sender_id, uint32_t dest_id, pwl_
 void print_message_info(msg_buffer_t* message);
 gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size);
 gboolean pwl_set_command(const gchar *command, gchar **response);
+gboolean pwl_set_command_available();
 
 #endif
