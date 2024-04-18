@@ -24,9 +24,11 @@
 
 
 typedef void (*signal_get_fw_version_callback)(const gchar*);
+typedef void (*signal_get_sub_state_change_callback)(const gchar*);
 
 typedef struct {
     signal_get_fw_version_callback callback_get_fw_version;
+    signal_get_sub_state_change_callback callback_sim_state_change;
 } signal_callback_t;
 
 void split_fw_versions(char *fw_version);

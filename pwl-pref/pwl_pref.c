@@ -109,6 +109,14 @@ static gboolean signal_get_fw_version_handler(pwlCore *object, const gchar *arg,
     return TRUE;
 }
 
+static gboolean signal_sim_state_change_handler(pwlCore *object, const gchar *arg, gpointer userdata) {
+    if (NULL != g_signal_callback.callback_sim_state_change) {
+        g_signal_callback.callback_sim_state_change(arg);
+    }
+
+    return TRUE;
+}
+
 static void cb_owner_name_changed_notify(GObject *object, GParamSpec *pspec, gpointer userdata) {
     gchar *pname_owner = NULL;
     pname_owner = g_dbus_proxy_get_name_owner((GDBusProxy*)object);
@@ -126,6 +134,8 @@ bool register_client_signal_handler(pwlCore *p_proxy) {
     PWL_LOG_DEBUG("register_client_signal_handler call.");
     g_ret_signal_handler[0] = g_signal_connect(p_proxy, "notify::g-name-owner", G_CALLBACK(cb_owner_name_changed_notify), NULL);
     g_ret_signal_handler[1] = g_signal_connect(p_proxy, "get-fw-version-signal", G_CALLBACK(signal_get_fw_version_handler), NULL);
+    g_ret_signal_handler[2] = g_signal_connect(p_proxy, "subscriber-ready-state-change",
+                                               G_CALLBACK(signal_sim_state_change_handler), NULL);
     return TRUE;
 }
 
@@ -144,19 +154,6 @@ void registerSignalCallback(signal_callback_t *callback) {
 //        PWL_LOG_DEBUG("registerMethodCallback: parameter point is NULL");
 //    }
 //}
-
-gboolean dbus_service_is_ready(void) {
-    gchar *owner_name = NULL;
-    owner_name = g_dbus_proxy_get_name_owner((GDBusProxy*)gp_proxy);
-    if(NULL != owner_name) {
-        PWL_LOG_DEBUG("Owner Name: %s", owner_name);
-        g_free(owner_name);
-        return true;
-    } else {
-        PWL_LOG_ERR("Owner Name is NULL.");
-        return false;
-    }
-}
 
 bool gdbus_init(void) {
     bool b_ret = TRUE;
@@ -202,6 +199,21 @@ bool gdbus_init(void) {
     return b_ret;
 }
 
+gboolean dbus_service_is_ready(void) {
+    gchar *owner_name = NULL;
+    owner_name = g_dbus_proxy_get_name_owner((GDBusProxy*)gp_proxy);
+    if(NULL != owner_name) {
+        PWL_LOG_DEBUG("Owner Name: %s", owner_name);
+        g_free(owner_name);
+        return true;
+    } else {
+        PWL_LOG_ERR("Owner Name is NULL.");
+        sleep(1);
+        gdbus_init();
+        return false;
+    }
+}
+
 void send_message_queue(uint32_t cid) {
     mqd_t mq;
     mq = mq_open(CID_DESTINATION(cid), O_WRONLY);
@@ -221,6 +233,11 @@ void signal_callback_get_fw_version(const gchar* arg) {
     uint32_t cid = PWL_CID_GET_FW_VER;
     send_message_queue(cid);
     send_message_queue(PWL_CID_GET_CRSM);
+    return;
+}
+
+void signal_callback_sim_state_change(const gchar* arg) {
+    PWL_LOG_DEBUG("!!! signal_callback_sim_state_change !!!");
     return;
 }
 
@@ -417,6 +434,7 @@ gint main() {
     signal_callback_t signal_callback;
 
     signal_callback.callback_get_fw_version = signal_callback_get_fw_version;
+    signal_callback.callback_sim_state_change = signal_callback_sim_state_change;
 
     registerSignalCallback(&signal_callback);
 
