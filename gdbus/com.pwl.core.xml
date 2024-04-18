@@ -23,11 +23,16 @@
     <signal name="GetFwVersionSignal">
     </signal>
 
+    <signal name="SubscriberReadyStateChange">
+    </signal>
+
     <method name="MadptReadyMethod">
     </method>
 
     <method name="ReadyToFccUnlockMethod">
     </method>
 
+    <method name="GpioResetMethod">
+    </method>
   </interface>
 </node>
