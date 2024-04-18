@@ -424,6 +424,7 @@ int check_fastboot_download_port( char *argv )
     if( transport != nullptr )
     {
        transport->Close();
+       delete transport;
        return 1;
     }
     return 0;
@@ -528,5 +529,6 @@ int fastboot_main( int exe_case, char *argv1, char *argv2, char *argv3, int devi
     //fprintf(stderr, "Finished. Total time: %.3fs\n", (now() - start));
 
     transport->Close();
+    delete transport;
     return status;
 }
