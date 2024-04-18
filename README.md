@@ -67,3 +67,9 @@ To install services
 # Release History
 - version: 1.0.0
   initial version.
+
+- version: 2.0.0
+    - Modem AT control over AT port
+    - Message box popup showing flash progress during module firmware update
+    - GPIO control reset feature implement
+    - HW/SW reset for error handling with module firmware update
