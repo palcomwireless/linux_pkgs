@@ -3,7 +3,7 @@ This repository contents below pwl linux service packages to be used with WWAN m
 
 `Core service` is the core controller of pwl services.
 
-`Moduel adapter service` is the module communication adapter service.
+`Module adapter service` is the module communication adapter service.
 
 `Preference service` is the config preference for the packages.
 
@@ -35,6 +35,7 @@ This project is dual-licensed under the [Apache License 2.0](LICENSE-APACHE) and
 - sudo apt install build-essential
 - sudo apt install pkg-config
 - sudo apt install libglib2.0-dev
+- sudo apt install libmbim-glib-dev
 
 ## 2. Build
 To compile and build services:
