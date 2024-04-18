@@ -19,6 +19,35 @@
 #define __PWL_CORE_H__
 
 #include "CoreGdbusGenerated.h"
+#include "libmbim-glib.h"
 
+typedef struct {
+    char *skuid;
+    int gpio;
+} s_skuid_to_gpio;
+
+s_skuid_to_gpio g_skuid_to_gpio[] = {
+        {"0CBD", 883},
+        {"0CC2", 883},
+        {"0CC1", 883},
+        {"0CC4", 883},
+        {"0CB5", 717},
+        {"0CB6", 717},
+        {"0CB7", 595},
+        {"0CB8", 595},
+        {"0CB2", 717},
+        {"0CB3", 717},
+        {"0CB4", 595},
+        {"0CB9", 717},
+        {"0CBA", 717},
+        {"0CBB", 717},
+        {"0CBC", 595},
+        {"0CD9", 717},
+        {"0CDA", 717}
+};
+
+int gpio_init(void);
+int set_gpio_status(int enable, int gpio);
+static gboolean hw_reset();
 
 #endif
