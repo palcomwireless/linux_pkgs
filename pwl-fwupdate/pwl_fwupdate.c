@@ -2166,6 +2166,7 @@ int start_udpate_process()
     // Check AP version before download, TEMP
     while (!g_is_get_fw_ver)
     {
+        send_message_queue(PWL_CID_UPDATE_FW_VER);
         get_current_fw_version();
         PWL_LOG_DEBUG("get fw ver not ready! Retry after 5 sec");
         sleep(5);
