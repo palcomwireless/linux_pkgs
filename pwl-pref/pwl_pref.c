@@ -57,8 +57,9 @@ static gboolean get_host_info(const gchar *cmd, gchar *buff, gint buff_len) {
         return FALSE;
     }
 
-    fgets(buff, buff_len, fp);
-    buff[strcspn(buff, "\n")] = 0;
+    if (fgets(buff, buff_len, fp) != NULL) {
+        buff[strcspn(buff, "\n")] = 0;
+    }
 
     pclose(fp);
 
@@ -400,8 +401,28 @@ static gpointer msg_queue_thread_func(gpointer data) {
 
 void split_fw_versions(char *fw_version) {
     char *splitted_str;
-    char *version_array[4];
+    char *version_array[4] = { NULL };
     int i = 0;
+
+    PWL_LOG_DEBUG("fw version %s", fw_version);
+
+    if (g_main_fw_version) {
+        free(g_main_fw_version);
+        g_main_fw_version = NULL;
+    }
+    if (g_ap_version) {
+        free(g_ap_version);
+        g_ap_version = NULL;
+    }
+    if (g_carrier_version) {
+        free(g_carrier_version);
+        g_carrier_version = NULL;
+    }
+    if (g_oem_version) {
+        free(g_oem_version);
+        g_oem_version = NULL;
+    }
+
     splitted_str = strtok(fw_version, "_");
     while (splitted_str != NULL)
     {
@@ -409,14 +430,18 @@ void split_fw_versions(char *fw_version) {
         splitted_str = strtok(NULL, "_");
         i++;
     }
-    g_main_fw_version = malloc(strlen(version_array[0]));
-    g_ap_version = malloc(strlen(version_array[1]));
-    g_carrier_version = malloc(strlen(version_array[2]));
-    g_oem_version = malloc(strlen(version_array[3]));
-    strcpy(g_main_fw_version, version_array[0]);
-    strcpy(g_ap_version, version_array[1]);
-    strcpy(g_carrier_version, version_array[2]);
-    strcpy(g_oem_version, version_array[3]);
+
+    if (version_array[0] != NULL && version_array[1] != NULL &&
+        version_array[2] != NULL && version_array[3] != NULL) {
+        g_main_fw_version = malloc(strlen(version_array[0]));
+        g_ap_version = malloc(strlen(version_array[1]));
+        g_carrier_version = malloc(strlen(version_array[2]));
+        g_oem_version = malloc(strlen(version_array[3]));
+        strcpy(g_main_fw_version, version_array[0]);
+        strcpy(g_ap_version, version_array[1]);
+        strcpy(g_carrier_version, version_array[2]);
+        strcpy(g_oem_version, version_array[3]);
+    }
 
     PWL_LOG_DEBUG("main fw version: %s", g_main_fw_version);
     PWL_LOG_DEBUG("ap version: %s", g_ap_version);
