@@ -68,7 +68,8 @@ gboolean pwl_module_usb_id_exist(gchar *usbid) {
 
     char response[200];
     memset(response, 0, sizeof(response));
-    fgets(response, sizeof(response), fp);
+    char *ret = fgets(response, sizeof(response), fp);
+
     pclose(fp);
 
     if (strlen(response) > 0)
@@ -153,7 +154,7 @@ gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size) {
 
     char buffer[50];
     memset(buffer, 0, sizeof(buffer));
-    fgets(buffer, sizeof(buffer), fp);
+    char *ret = fgets(buffer, sizeof(buffer), fp);
     pclose(fp);
 
     buffer[strcspn(buffer, "\n")] = 0;
