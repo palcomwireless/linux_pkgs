@@ -7,7 +7,7 @@ INCLUDE_DIRECTORIES(${PROJECT_BINARY_DIR}/)
 
 file(GLOB FB_SRC fastboot/*.cpp)
 
-add_compile_options("-Wno-format;-Wno-ignored-attributes")
+add_compile_options(-Wno-ignored-attributes)
 
 add_executable(pwl_fwupdate pwl_fwupdate.c fb_programing.c ${FB_SRC} ${PROJECT_SOURCE_DIR}/common/common.c ${PROJECT_BINARY_DIR}/CoreGdbusGenerated.c)
 
