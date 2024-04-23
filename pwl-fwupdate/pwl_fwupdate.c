@@ -215,7 +215,7 @@ char* get_test_sku_id()
         fclose(fp);
         return "4131001";
     }
-    sprintf(g_test_sku_id, test_sku_id);
+    sprintf(g_test_sku_id, "%s", test_sku_id);
     return g_test_sku_id;
 }
 
@@ -612,23 +612,23 @@ int check_modem_download_port( char *modem_usb_port )
 
     fp = popen( input, "r" );
 
-    if( fp )
-    {
-        fgets( output, 1024, fp );
-    }
-    else    return 0;
-    
-    // if( strncmp( output, modem_usb_port, strlen(modem_usb_port) ) == 0 )  {  pclose( fp ); return 1; }
-    // else        {   pclose( fp ); return 0; }
-    if (strstr(output, "cannot access") == NULL)
-    {
-        strcpy(g_diag_modem_port[0], output);
-        PWL_LOG_DEBUG("\nmodem port: %s", g_diag_modem_port[0]);
-        pclose( fp ); return 1;
-    }
-    else
-    {
-        pclose( fp ); return 0; 
+    if (fp) {
+        if (fgets(output, 1024, fp) != NULL) {
+
+            // if( strncmp( output, modem_usb_port, strlen(modem_usb_port) ) == 0 )  {  pclose( fp ); return 1; }
+            // else        {   pclose( fp ); return 0; }
+            if (strstr(output, "cannot access") == NULL) {
+                strcpy(g_diag_modem_port[0], output);
+                PWL_LOG_DEBUG("\nmodem port: %s", g_diag_modem_port[0]);
+                pclose(fp);
+                return 1;
+            } else {
+                pclose(fp);
+                return 0;
+            }
+        }
+    } else {
+        return 0;
     }
 }
 
@@ -977,10 +977,10 @@ gint get_image_version(char *image_file_name, char *ver_info)
     memset(hsize, 0, sizeof(hsize));
 
     fseek(fp, 2, SEEK_SET);
-    fread(id, 1, 10, fp);
+    len = fread(id, 1, 10, fp);
 
     fseek(fp, 22, SEEK_SET);
-    fread(hsize, 1, 4, fp);
+    len = fread(hsize, 1, 4, fp);
     size = (hsize[3]<<24)+(hsize[2]<<16)+(hsize[1]<<8)+hsize[0];
 
     if( 0 == size ) 
