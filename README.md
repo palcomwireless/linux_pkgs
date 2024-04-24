@@ -73,3 +73,6 @@ To install services
     - Message box popup showing flash progress during module firmware update
     - GPIO control reset feature implement
     - HW/SW reset for error handling with module firmware update
+
+- version: 2.0.1
+    - Build failure & memory leak fix
