@@ -21,15 +21,32 @@
 #include <glib.h>
 #include <mqueue.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #define MFR_NAME                        "Dell"
 
 #define PWL_CMD_TIMEOUT_SEC             5
 #define PWL_OPEN_MBIM_TIMEOUT_SEC       10
 
+#define INFO_BUFFER_SIZE                100
 #define PWL_MAX_MFR_SIZE                10 // min size for "Dell Inc."
 #define PWL_MAX_SKUID_SIZE              15
 #define PWL_MAX_OEMSKUID_SIZE           8
+
+#define STATUS_LINE_LENGTH              128
+#define FW_UPDATE_STATUS_RECORD         "/opt/pwl/firmware/fw_update_status"
+#define FIND_FASTBOOT_RETRY_COUNT       "Find_fastboot_retry_count"
+#define WAIT_MODEM_PORT_RETRY_COUNT     "Wait_modem_port_retry_count"
+#define WAIT_AT_PORT_RETRY_COUNT        "Wait_at_port_retry_count"
+#define FW_UPDATE_RETRY_COUNT           "Fw_update_retry_count"
+#define DO_HW_RESET_COUNT               "Do_hw_reset_count"
+#define NEED_RETRY_FW_UPDATE            "Need_retry_fw_update"
+
+#define FW_UPDATE_RETRY_TH              3
+#define FIND_FASTBOOT_RETRY_TH          10
+#define WAIT_MODEM_PORT_RETRY_TH        10
+#define WAIT_AT_PORT_RETRY_TH           10
+#define HW_RESET_RETRY_TH               5
 
 #define PWL_MQ_MAX_MSG                  10
 #define PWL_MQ_MAX_CONTENT_LEN          30
@@ -48,8 +65,9 @@
 #define PWL_MQ_PATH_FWUPDATE            "/pwl_fwupdate"
 #define PWL_MQ_PATH_UNLOCK              "/pwl_unlock"
 
-#define PWL_UNKNOW_SIM_CARRIER          "UNKNOW"
+#define PWL_UNKNOWN_SIM_CARRIER         "UNKNOWN"
 #define PWL_FW_UPDATE_RETRY_LIMIT       3
+#define PWL_OEM_PRI_RESET_RETRY         3
 
 #define PWL_MQ_PATH(x) \
     ((x == PWL_MQ_ID_CORE)        ? PWL_MQ_PATH_CORE : \
@@ -92,6 +110,9 @@ typedef enum {
     PWL_CID_AT_UCOMP,
     PWL_CID_RESET,
     PWL_CID_GET_OEM_PRI_INFO,
+    PWL_CID_GET_JP_FCC_AUTO_REBOOT,
+    PWL_CID_ENABLE_JP_FCC_AUTO_REBOOT,
+    PWL_CID_GET_OEM_PRI_RESET,
     PWL_CID_MADPT_RESTART,
     PLW_CID_MAX_MADPT,
     PWL_CID_MAX
@@ -121,7 +142,10 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_CRSM] = "GET_CRSM",
     [PWL_CID_AT_UCOMP] = "AT_UCOMP",
     [PWL_CID_RESET] = "RESET",
-    [PWL_CID_GET_OEM_PRI_INFO] = "PWL_CID_GET_OEM_PRI_INFO",
+    [PWL_CID_GET_OEM_PRI_INFO] = "GET_OEM_PRI_INFO",
+    [PWL_CID_GET_JP_FCC_AUTO_REBOOT] = "GET_JP_FCC_AUTO_REBOOT",
+    [PWL_CID_ENABLE_JP_FCC_AUTO_REBOOT] = "ENABLE_JP_FCC_AUTO_REBOOT",
+    [PWL_CID_GET_OEM_PRI_RESET] = "GET_OEM_PRI_RESET",
     [PWL_CID_MADPT_RESTART] = "MADPT_RESTART",
 };
 
@@ -156,8 +180,17 @@ typedef enum {
     PWL_AT_CHANNEL
 } pwl_at_intf_t;
 
+typedef enum {
+    PWL_CID_GET_ENABLE_STATE_DISABLED,
+    PWL_CID_GET_ENABLE_STATE_ENABLED,
+    PWL_CID_GET_ENABLE_STATE_ERROR
+} pwl_get_enable_state_t;
 
 gboolean pwl_discard_old_messages(const gchar *path);
+gboolean get_host_info(const gchar *cmd, gchar *buff, gint buff_len);
+gboolean filter_host_info_header(const gchar *header, gchar *info, gchar *buff, gint buff_len);
+void pwl_get_manufacturer(gchar *buff, gint buff_len);
+void pwl_get_skuid(gchar *buff, gint buff_len);
 gboolean pwl_module_usb_id_exist(gchar *usbid);
 gboolean cond_wait(pthread_mutex_t *mutex, pthread_cond_t *cond, gint wait_time);
 void send_message_reply(uint32_t cid, uint32_t sender_id, uint32_t dest_id, pwl_cid_status_t status, char *msg);
@@ -165,5 +198,9 @@ void print_message_info(msg_buffer_t* message);
 gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size);
 gboolean pwl_set_command(const gchar *command, gchar **response);
 gboolean pwl_set_command_available();
+int fw_update_status_init();
+int set_fw_update_status_value(char *key, int value);
+int get_fw_update_status_value(char *key, int *result);
+int count_int_length(unsigned x);
 
 #endif
