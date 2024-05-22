@@ -76,3 +76,11 @@ To install services
 
 - version: 2.0.1
     - Build failure & memory leak fix
+
+- version: 3.0.0
+    - Support firmware downgrade
+    - Enable modem auto switch when sim carrier change
+    - After firmware upgrade, wait for modem config to complete before perform reboot
+    - Control flow after GPIO HW reset
+    - Enhance error case handling
+    - pwl_unlock completely independent from other services
