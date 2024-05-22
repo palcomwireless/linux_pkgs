@@ -31,6 +31,11 @@
 #define OEM_PRI_UPDATE_RESET     2   // Reset module
 #define OEM_PRI_UPDATE_NORESET   3   // Nothing
 
+#define OEM_PRI_RESET_NOT_READY         0  // cont. to query reset state
+#define OEM_PRI_RESET_UPDATE_SUCCESS    1  // trigger modem reboot
+#define OEM_PRI_RESET_UPDATE_FAILED     2  // error
+#define OEM_PRI_RESET_NO_NEED_UPDATE    9  // trigger modem reboot
+
 void restart();
 
 #endif
