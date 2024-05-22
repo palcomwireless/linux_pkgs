@@ -26,6 +26,9 @@
     <signal name="SubscriberReadyStateChange">
     </signal>
 
+    <signal name="RequestRetryFwUpdateSignal">
+    </signal>
+
     <method name="MadptReadyMethod">
     </method>
 
@@ -33,6 +36,9 @@
     </method>
 
     <method name="GpioResetMethod">
+    </method>
+
+    <method name="RequestRetryFwUpdateMethod">
     </method>
   </interface>
 </node>
