@@ -52,6 +52,64 @@ gboolean pwl_discard_old_messages(const gchar *path) {
     return 0;
 }
 
+gboolean get_host_info(const gchar *cmd, gchar *buff, gint buff_len) {
+    FILE *fp = popen(cmd, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("cmd error!!!");
+        return FALSE;
+    }
+
+    if (fgets(buff, buff_len, fp) != NULL) {
+        buff[strcspn(buff, "\n")] = 0;
+    }
+
+    pclose(fp);
+
+    return TRUE;
+}
+
+gboolean filter_host_info_header(const gchar *header, gchar *info, gchar *buff, gint buff_len) {
+    gchar* head = strstr(info, header);
+
+    if (head != NULL) {
+        gint info_len = strlen(head + strlen(header));
+
+        if (info_len > 1 && buff_len >= (info_len + 1)) {
+            strcpy(buff, head + strlen(header));
+            return TRUE;
+        } else {
+            PWL_LOG_ERR("host info buffer error, %d, %d, %s", info_len, buff_len, info);
+            return FALSE;
+        }
+    }
+}
+
+void pwl_get_manufacturer(gchar *buff, gint buff_len) {
+    memset(buff, 0, buff_len);
+
+    gchar manufacturer[INFO_BUFFER_SIZE];
+    if (!get_host_info("dmidecode -t 1 | grep 'Manufacturer:'", manufacturer, INFO_BUFFER_SIZE)) {
+        PWL_LOG_ERR("Get Manufacturer failed!");
+    } else {
+        if (!filter_host_info_header("Manufacturer: ", manufacturer, buff, buff_len)) {
+            PWL_LOG_ERR("Get Manufacturer info failed!");
+        }
+    }
+}
+
+void pwl_get_skuid(gchar *buff, gint buff_len) {
+    memset(buff, 0, buff_len);
+
+    gchar skuid[INFO_BUFFER_SIZE];
+    if (!get_host_info("dmidecode -t 1 | grep 'SKU Number:'", skuid, INFO_BUFFER_SIZE)) {
+        PWL_LOG_ERR("Get SKU Number failed!");
+    } else {
+        if (!filter_host_info_header("SKU Number: ", skuid, buff, buff_len)) {
+            PWL_LOG_ERR("Get SKU Number info failed!");
+        }
+    }
+}
+
 gboolean pwl_module_usb_id_exist(gchar *usbid) {
 
     gchar command[] = "lsusb | grep ";
@@ -239,4 +297,134 @@ gboolean pwl_set_command_available() {
     }
 
     return available;
+}
+
+int fw_update_status_init() {
+    FILE *fp;
+
+    if (0 == access(FW_UPDATE_STATUS_RECORD, F_OK)) {
+        PWL_LOG_DEBUG("File exist");
+        fp = fopen(FW_UPDATE_STATUS_RECORD, "r");
+
+        if (fp == NULL) {
+            PWL_LOG_ERR("Open fw_status file error!");
+            return -1;
+        }
+        /*
+        get_fw_update_status_value(FIND_FASTBOOT_RETRY_COUNT, &g_check_fastboot_retry_count);
+        get_fw_update_status_value(WAIT_MODEM_PORT_RETRY_COUNT, &g_wait_modem_port_retry_count);
+        get_fw_update_status_value(WAIT_AT_PORT_RETRY_COUNT, &g_wait_at_port_retry_count);
+        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &g_fw_update_retry_count);
+        get_fw_update_status_value(DO_HW_RESET_COUNT, &g_do_hw_reset_count);
+        get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &g_need_retry_fw_update);
+        */
+        fclose(fp);
+    } else {
+        PWL_LOG_DEBUG("File not exist");
+        fp = fopen(FW_UPDATE_STATUS_RECORD, "w");
+
+        if (fp == NULL) {
+            PWL_LOG_ERR("Create fw_status file error!");
+            return -1;
+        }
+
+        fprintf(fp, "Find_fastboot_retry_count=0\n");
+        fprintf(fp, "Wait_modem_port_retry_count=0\n");
+        fprintf(fp, "Wait_at_port_retry_count=0\n");
+        fprintf(fp, "Fw_update_retry_count=0\n");
+        fprintf(fp, "Do_hw_reset_count=0\n");
+        fprintf(fp, "Need_retry_fw_update=0\n");
+        fclose(fp);
+    }
+    return 0;
+}
+
+int set_fw_update_status_value(char *key, int value) {
+    FILE *fp;
+    char line[STATUS_LINE_LENGTH];
+    char new_value_line[STATUS_LINE_LENGTH];
+    char *new_content = NULL;
+
+    fp = fopen(FW_UPDATE_STATUS_RECORD, "r+");
+    int value_len, file_size, new_file_size;
+    value_len = count_int_length(value);
+    if (fp == NULL) {
+        PWL_LOG_ERR("Open fw_status file error!");
+        return -1;
+    }
+
+    // Check size
+    fseek(fp, 0, SEEK_END);
+    file_size = ftell(fp);
+
+    new_file_size = file_size + value_len + 1;
+    new_content = malloc(new_file_size);
+    memset(new_content, 0, sizeof(new_content));
+
+    fseek(fp, 0, SEEK_SET);
+    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
+        if (strstr(line, key)) {
+            sprintf(new_value_line, "%s=%d\n", key, value);
+            strcat(new_content, new_value_line);
+        } else {
+            strcat(new_content, line);
+        }
+    }
+    fclose(fp);
+    fp = fopen(FW_UPDATE_STATUS_RECORD, "w");
+
+    if (fp == NULL) {
+        PWL_LOG_ERR("Create fw_status file error!\n");
+        return -1;
+    }
+    fwrite(new_content, sizeof(char), strlen(new_content), fp);
+    free(new_content);
+    fclose(fp);
+
+    return 0;
+}
+
+int get_fw_update_status_value(char *key, int *result) {
+    FILE *fp;
+    char line[STATUS_LINE_LENGTH];
+    char *temp_pos = NULL;
+    char value[5];
+
+    fp = fopen(FW_UPDATE_STATUS_RECORD, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Open fw_status file error!");
+        return -1;
+    }
+
+    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
+        if (strstr(line, key)) {
+            temp_pos = strchr(line, '=');
+            ++temp_pos;
+            strncpy(value, temp_pos, strlen(temp_pos));
+            if (NULL != strstr(value, "\r\n"))
+            {
+                PWL_LOG_DEBUG("get result string has carriage return\n");
+                value[strlen(temp_pos)-2] = '\0';
+            } else {
+                value[strlen(temp_pos)-1] = '\0';
+            }
+        }
+    }
+    // PWL_LOG_DEBUG("value: %s\n", value);
+    *result = atoi(value);
+    fclose(fp);
+    return 0;
+}
+
+int count_int_length(unsigned x) {
+    if (x >= 1000000000) return 10;
+    if (x >= 100000000)  return 9;
+    if (x >= 10000000)   return 8;
+    if (x >= 1000000)    return 7;
+    if (x >= 100000)     return 6;
+    if (x >= 10000)      return 5;
+    if (x >= 1000)       return 4;
+    if (x >= 100)        return 3;
+    if (x >= 10)         return 2;
+    return 1;
 }
