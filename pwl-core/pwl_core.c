@@ -32,6 +32,13 @@ static gboolean device_open_ms_mbimex_v3_flag = FALSE;
 static MbimDevice *device;
 static GCancellable *cancellable;
 
+// For GPIO reset
+// int g_check_fastboot_retry_count;
+// int g_wait_modem_port_retry_count;
+// int g_wait_at_port_retry_count;
+int g_fw_update_retry_count;
+int g_do_hw_reset_count;
+int g_need_retry_fw_update;
 
 void send_message_queue(uint32_t cid) {
     mqd_t mq;
@@ -59,7 +66,6 @@ static gboolean madpt_ready_method(pwlCore     *object,
 
     PWL_LOG_DEBUG("Madpt ready, send signal to get FW version!");
     pwl_core_emit_get_fw_version_signal(gp_skeleton);
-
     return TRUE;
 
 }
@@ -75,12 +81,33 @@ static gboolean ready_to_fcc_unlock_method(pwlCore     *object,
 
 static gboolean gpio_reset_method(pwlCore     *object,
                            GDBusMethodInvocation *invocation) {
-    hw_reset();
+    get_fw_update_status_value(DO_HW_RESET_COUNT, &g_do_hw_reset_count);
+    if (g_do_hw_reset_count <= HW_RESET_RETRY_TH) {
+        g_do_hw_reset_count++;
+        set_fw_update_status_value(DO_HW_RESET_COUNT, g_do_hw_reset_count);
+        hw_reset();
+    } else {
+        PWL_LOG_ERR("Reached HW reset retry limit!!! (%d,%d)", g_fw_update_retry_count, g_do_hw_reset_count);
+    }
     return TRUE;
 }
 
-static gboolean hw_reset() {
+//static gboolean request_retry_fw_update_method(pwlCore     *object,
+//                           GDBusMethodInvocation *invocation) {
+//    // Check fw update retry count
+//    if (g_fw_update_retry_count <= FW_UPDATE_RETRY_TH) {
+//        PWL_LOG_DEBUG("Send retry fw update request signal.");
+//        g_fw_update_retry_count++;
+//        set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
+//        set_fw_update_status_value(NEED_RETRY_FW_UPDATE, 0);
+//        pwl_core_emit_request_retry_fw_update_signal(gp_skeleton);
+//    } else {
+//        PWL_LOG_ERR("Reach fw update retry limit (3 times), abort update!");
+//    }
+//    return TRUE;
+//}
 
+static gboolean hw_reset() {
     PWL_LOG_DEBUG("!!=== Do GPIO reset ===!!");
     int ret = 0;
     FILE *fp = NULL;
@@ -256,6 +283,7 @@ static void bus_acquired_hdl(GDBusConnection *connection,
     (void) g_signal_connect(gp_skeleton, "handle-madpt-ready-method", G_CALLBACK(madpt_ready_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-ready-to-fcc-unlock-method", G_CALLBACK(ready_to_fcc_unlock_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-gpio-reset-method", G_CALLBACK(gpio_reset_method), NULL);
+    //(void) g_signal_connect(gp_skeleton, "handle-request-retry-fw-update-method", G_CALLBACK(request_retry_fw_update_method), NULL);
 
     /** Fourth step: Export interface skeleton. */
     (void) g_dbus_interface_skeleton_export(G_DBUS_INTERFACE_SKELETON(gp_skeleton),
@@ -719,6 +747,16 @@ gint main() {
     if (owner_id < 0) {
         PWL_LOG_ERR("bus init failed!");
         return 0;
+    }
+
+    // FW update status init
+    if (fw_update_status_init() == 0) {
+        // get_fw_update_status_value(FIND_FASTBOOT_RETRY_COUNT, &g_check_fastboot_retry_count);
+        // get_fw_update_status_value(WAIT_MODEM_PORT_RETRY_COUNT, &g_wait_modem_port_retry_count);
+        // get_fw_update_status_value(WAIT_AT_PORT_RETRY_COUNT, &g_wait_at_port_retry_count);
+        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &g_fw_update_retry_count);
+        get_fw_update_status_value(DO_HW_RESET_COUNT, &g_do_hw_reset_count);
+        get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &g_need_retry_fw_update);
     }
 
     gpio_init();
