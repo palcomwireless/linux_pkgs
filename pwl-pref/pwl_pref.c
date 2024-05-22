@@ -25,7 +25,9 @@
 #include "log.h"
 #include "pwl_pref.h"
 
-#define INFO_BUFFER_SIZE            100
+// For general mutex usage
+pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t g_cond = PTHREAD_COND_INITIALIZER;
 
 static GMainLoop *gp_loop = NULL;
 static pwlCore *gp_proxy = NULL;
@@ -50,57 +52,6 @@ static gchar g_manufacturer[PWL_MAX_MFR_SIZE] = {0};
 static gchar g_skuid[PWL_MAX_SKUID_SIZE] = {0};
 static gchar g_fwver[INFO_BUFFER_SIZE] = {0};
 
-static gboolean get_host_info(const gchar *cmd, gchar *buff, gint buff_len) {
-    FILE *fp = popen(cmd, "r");
-    if (fp == NULL) {
-        PWL_LOG_ERR("cmd error!!!");
-        return FALSE;
-    }
-
-    if (fgets(buff, buff_len, fp) != NULL) {
-        buff[strcspn(buff, "\n")] = 0;
-    }
-
-    pclose(fp);
-
-    return TRUE;
-}
-
-static gboolean filter_host_info_header(const gchar *header, gchar *info, gchar *buff, gint buff_len) {
-    gchar* head = strstr(info, header);
-
-    if (head != NULL) {
-        gint info_len = strlen(head + strlen(header));
-
-        if (info_len > 1 && buff_len >= (info_len + 1)) {
-            strcpy(buff, head + strlen(header));
-        } else {
-            PWL_LOG_ERR("host info buffer error, %d, %d, %s", info_len, buff_len, info);
-        }
-    }
-}
-
-void get_system_information() {
-    memset(g_manufacturer, 0, PWL_MAX_MFR_SIZE);
-    gchar manufacturer[INFO_BUFFER_SIZE];
-    if (!get_host_info("dmidecode -t 1 | grep 'Manufacturer:'", manufacturer, INFO_BUFFER_SIZE)) {
-        PWL_LOG_ERR("Get Manufacturer failed!");
-    } else {
-        if (!filter_host_info_header("Manufacturer: ", manufacturer, g_manufacturer, PWL_MAX_MFR_SIZE)) {
-            PWL_LOG_ERR("Get Manufacturer info failed!");
-        }
-    }
-
-    memset(g_skuid, 0, PWL_MAX_SKUID_SIZE);
-    gchar skuid[INFO_BUFFER_SIZE];
-    if (!get_host_info("dmidecode -t 1 | grep 'SKU Number:'", skuid, INFO_BUFFER_SIZE)) {
-        PWL_LOG_ERR("Get SKU Number failed!");
-    } else {
-        if (!filter_host_info_header("SKU Number: ", skuid, g_skuid, PWL_MAX_SKUID_SIZE)) {
-            PWL_LOG_ERR("Get SKU Number info failed!");
-        }
-    }
-}
 
 static gboolean signal_get_fw_version_handler(pwlCore *object, const gchar *arg, gpointer userdata) {
     if (NULL != g_signal_callback.callback_get_fw_version) {
@@ -231,9 +182,42 @@ void send_message_queue(uint32_t cid) {
 
 void signal_callback_get_fw_version(const gchar* arg) {
     PWL_LOG_DEBUG("!!! signal_callback_get_fw_version !!!");
-    uint32_t cid = PWL_CID_GET_FW_VER;
-    send_message_queue(cid);
-    send_message_queue(PWL_CID_GET_CRSM);
+
+    for (int i = 0; i < 3; i++) {
+        send_message_queue(PWL_CID_GET_FW_VER);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_FW_VER]);
+        }
+        if (g_main_fw_version != NULL && strlen(g_main_fw_version) > 0) {
+            break;
+        } else {
+            g_usleep(1000*300);
+            continue;
+        }
+    }
+
+    for (int i = 0; i < 3; i++) {
+        send_message_queue(PWL_CID_GET_CRSM);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_CRSM]);
+        }
+        if (g_mnc_len == 0) {
+            g_usleep(1000*300);
+            continue;
+        } else {
+            for (int j = 0; j < 3; j++) {
+                send_message_queue(PWL_CID_GET_CIMI);
+                if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                    PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_CIMI]);
+                }
+                if (strlen(g_sim_carrier) > 0) {
+                    break;
+                }
+                g_usleep(1000*300);
+            }
+            break;
+        }
+    }
     return;
 }
 
@@ -244,7 +228,6 @@ void signal_callback_sim_state_change(const gchar* arg) {
 
 void get_carrier_from_sim(char *mcc, char *mnc)
 {
-    char command[128] = {0};
     int line, i, found = 0;
     char buffer[255];
     char *splitted_str;
@@ -257,7 +240,7 @@ void get_carrier_from_sim(char *mcc, char *mnc)
         PWL_LOG_DEBUG("mnc: %s", mnc);
     }
 
-    FILE *file = fopen("common/mcc_mnc_list.csv", "r");
+    FILE *file = fopen("/opt/pwl/mcc_mnc_list.csv", "r");
     if (file)
     {
         while (fgets(buffer, 255, file))
@@ -300,7 +283,7 @@ void get_carrier_from_sim(char *mcc, char *mnc)
         fclose(file);
     }
     else
-        strcpy(g_sim_carrier, PWL_UNKNOW_SIM_CARRIER);
+        strcpy(g_sim_carrier, PWL_UNKNOWN_SIM_CARRIER);
 }
 
 static gpointer msg_queue_thread_func(gpointer data) {
@@ -356,28 +339,41 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 send_message_queue(PWL_CID_GET_FW_VER);
                 break;
             case PWL_CID_GET_CRSM:
-                if (strlen(message.response) > 0)
-                {
-                    mnc_len_temp = message.response[strlen(message.response)-2];
-                    g_mnc_len = atoi(&mnc_len_temp);
-                    send_message_queue(PWL_CID_GET_CIMI);
+                g_mnc_len = 0;
+                if (message.status == PWL_CID_STATUS_OK) {
+                    if (strlen(message.response) > 0 && strncmp("+CRSM: ", message.response, strlen("+CRSM: ")) == 0)
+                    {
+                        // search first '"'
+                        gchar* match = strstr(message.response, "\"");
+                        if (match != NULL) {
+                            // search 2nd '"'
+                            match = strstr(match + 1, "\"");
+                        }
+                        if (match != NULL) {
+                            match--;
+                            mnc_len_temp = match[0];
+                            g_mnc_len = atoi(&mnc_len_temp);
+                        }
+                    }
                 }
-                else
-                {
-                    g_mnc_len = 0;
-                    strcpy(g_sim_carrier, PWL_UNKNOW_SIM_CARRIER);
-                    if (1) PWL_LOG_DEBUG("Sim carrier: %s", g_sim_carrier);
-                }
+                pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_GET_CIMI:
-                PWL_LOG_DEBUG("%s", message.response);
-                strncpy(sim_mcc_mnc[0], message.response, 3);
-                strncpy(sim_mcc_mnc[1], message.response+3, g_mnc_len);
-                get_carrier_from_sim(sim_mcc_mnc[0], sim_mcc_mnc[1]);
-                if (1) PWL_LOG_DEBUG("Sim carrier: %s", g_sim_carrier);
+                if (message.status == PWL_CID_STATUS_OK) {
+                    PWL_LOG_DEBUG("%s", message.response);
+                    strncpy(sim_mcc_mnc[0], message.response, 3);
+                    strncpy(sim_mcc_mnc[1], message.response + 3, g_mnc_len);
+                    get_carrier_from_sim(sim_mcc_mnc[0], sim_mcc_mnc[1]);
+                    PWL_LOG_DEBUG("Sim carrier: %s", g_sim_carrier);
+                }
+                pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_GET_SIM_CARRIER:
-                send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_sim_carrier);
+                if (strlen(g_sim_carrier) > 0) {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_sim_carrier);
+                } else {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, g_sim_carrier);
+                }
                 break;
             /* CID request from myself */
             case PWL_CID_GET_FW_VER:
@@ -389,6 +385,7 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 }
                 else
                     PWL_LOG_DEBUG("FW version abnormal, abort!");
+                pthread_cond_signal(&g_cond);
                 break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
@@ -452,8 +449,9 @@ void split_fw_versions(char *fw_version) {
 gint main() {
     pwl_discard_old_messages(PWL_MQ_PATH_PREF);
 
-    get_system_information();
+    pwl_get_manufacturer(g_manufacturer, PWL_MAX_MFR_SIZE);
     if (DEBUG) PWL_LOG_DEBUG("Manufacturer: %s", g_manufacturer);
+    pwl_get_skuid(g_skuid, PWL_MAX_SKUID_SIZE);
     if (DEBUG) PWL_LOG_DEBUG("SKU Number: %s", g_skuid);
 
     signal_callback_t signal_callback;
