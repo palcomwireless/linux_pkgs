@@ -35,11 +35,14 @@
 #ifndef __PWL_FWUPDATE_H__
 #define __PWL_FWUPDATE_H__
 
-#include <glib.h>
+// #include <glib.h>
 
 #include "log.h"
 #include "CoreGdbusGenerated.h"
 
+// 0: Not check, allow any version to download
+// 1: Allow upgrade or downgrade, but ignore the same version of image.
+// 2: Only allow upgrade
 #define COMPARE_FW_IMAGE_VERSION 1
 
 #define IMAGE_MONITOR_PATH          "/opt/pwl/"
@@ -61,29 +64,24 @@
 #define RET_SIGNAL_HANDLE_SIZE 4
 
 #define GET_TEST_SKU_ID        0
+#define GET_TEST_SIM_CARRIER   0
 
 //GPIO Reset 
 #define ENABLE_GPIO_RESET               1
-#define STATUS_LINE_LENGTH              128
-#define FW_UPDATE_STATUS_RECORD         "/opt/pwl/fw_update_status"
-#define FIND_FASTBOOT_RETRY_COUNT       "Find_fastboot_retry_count"
-#define WAIT_MODEM_PORT_RETRY_COUNT     "Wait_modem_port_retry_count"
-#define WAIT_AT_PORT_RETRY_COUNT        "Wait_at_port_retry_count"
-#define FW_UPDATE_RETRY_COUNT           "Fw_update_retry_count"
 
-#define FW_UPDATE_RETRY_TH              5
-#define FIND_FASTBOOT_RETRY_TH          10
-#define WAIT_MODEM_PORT_RETRY_TH        10
-#define WAIT_AT_PORT_RETRY_TH           10
+typedef void (*signal_get_retry_fw_update_callback)(const gchar*);
 
-int start_udpate_process();
+typedef struct {
+    signal_get_retry_fw_update_callback callback_retry_fw_update;
+} signal_callback_t;
+
+int start_update_process(gboolean is_startup);
 gint set_preferred_carrier();
 gint del_tune_code();
 gint set_oem_pri_version();
 gint get_ati_info();
-int fw_update_status_init();
-int set_fw_update_status_value(char *key, int value);
-int get_fw_update_status_value(char *key, int *result);
-int count_int_length(unsigned x);
 char *get_test_sku_id();
+void signal_callback_retry_fw_update(const gchar* arg);
+void registerSignalCallback(signal_callback_t *callback);
+
 #endif

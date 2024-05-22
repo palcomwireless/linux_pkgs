@@ -45,7 +45,7 @@
 
 
 #define APPNAME "fw_update"
-#define VERSION	"0.0.1"
+#define VERSION "0.0.1"
 
 #define STOP_MODEM_MANAGER 0
 #define START_MODEM_MANAGER 1
@@ -62,6 +62,7 @@
 #define SKIP_SKU_CHECK              0
 
 #define FW_VERSION_LENGTH   12
+#define OEM_PRI_VERSION_LENGTH  12
 
 #define USB_SERIAL_BUF_SIZE  1024
 
@@ -81,7 +82,13 @@ char g_pref_carrier[MAX_PATH];
 char g_skuid[PWL_MAX_SKUID_SIZE] = {0};
 char *g_oem_sku_id;
 char g_current_fw_ver[FW_VERSION_LENGTH];
+char g_oem_pri_ver[OEM_PRI_VERSION_LENGTH];
+gboolean gb_del_tune_code_ret = FALSE;
+gboolean gb_set_oem_pri_ver_ret = FALSE;
+gboolean gb_set_pref_carrier_ret = FALSE;
 gboolean g_is_get_fw_ver = FALSE;
+gboolean g_retry_fw_update = FALSE;
+gboolean g_has_update_include_fw_img = FALSE;
 
 int g_pref_carrier_id = 0;
 int MAX_PREFFERED_CARRIER_NUMBER = 14;
@@ -98,10 +105,16 @@ char g_allow_image_downgrade = 0;
 char g_output_debug_message = 0;
 
 // For GPIO reset
-int g_check_fastboot_retry_count;
-int g_wait_modem_port_retry_count;
-int g_wait_at_port_retry_count;
+gboolean g_is_fastboot_cmd_error = FALSE;
+// int g_check_fastboot_retry_count;
+// int g_wait_modem_port_retry_count;
+// int g_wait_at_port_retry_count;
 int g_fw_update_retry_count;
+int g_do_hw_reset_count;
+int g_need_retry_fw_update;
+
+static signal_callback_t g_signal_callback;
+static bool register_client_signal_handler(pwlCore *p_proxy);
 
 // For SKU test
 char g_test_sku_id[16];
@@ -165,7 +178,7 @@ void sort(const char* arr[], int n)
 } 
 const char* strstricase(const char* str, const char* subStr)
 {
-    int len = strlen(subStr);
+    int len = strlen(subStr) - 1;   //ignore the last '\0'
     if(len == 0)
     {
         return NULL;
@@ -321,9 +334,11 @@ void update_progress_dialog(int percent_add, char *message, char *additional_mes
         strcpy(g_progress_status, additional_message);
     }
 #endif
-    fwrite(g_progress_percent_text, sizeof(char), strlen(g_progress_percent_text), g_progress_fp);
-    fwrite(g_progress_status, sizeof(char), strlen(g_progress_status), g_progress_fp);
-    fflush(g_progress_fp);
+    if (g_progress_fp != NULL) {
+        fwrite(g_progress_percent_text, sizeof(char), strlen(g_progress_percent_text), g_progress_fp);
+        fwrite(g_progress_status, sizeof(char), strlen(g_progress_status), g_progress_fp);
+        fflush(g_progress_fp);
+    }
 }
 
 int check_fastboot_device()
@@ -494,16 +509,13 @@ void* msg_queue_thread_func() {
 #endif
                 break;
             case PWL_CID_GET_ATI:
-                if (DEBUG) PWL_LOG_DEBUG("CID ATI: %s", message.response);
+                if (DEBUG && message.status == PWL_CID_STATUS_OK) PWL_LOG_DEBUG("CID ATI: %s", message.response);
                 pthread_cond_signal(&g_cond);
                 // pthread_exit(NULL);
                 break;
             case PWL_CID_GET_OEM_PRI_INFO:
                 PWL_LOG_DEBUG("OEM PRI Info: %s", message.response);
                 pthread_cond_signal(&g_cond);
-                break;
-            case PWL_CID_UPDATE_FW_VER:
-                PWL_LOG_DEBUG("PWL_CID_UPDATE_FW_VER");
                 break;
             case PWL_CID_GET_MAIN_FW_VER:
                 PWL_LOG_DEBUG("MAIN FW VER: %s", message.response);
@@ -530,60 +542,83 @@ void* msg_queue_thread_func() {
             case PWL_CID_SWITCH_TO_FASTBOOT:
                 PWL_LOG_DEBUG("switch fastboot status %s, %s", cid_status_name[message.status], message.response);
                 if (strcmp(cid_status_name[message.status], "ERROR") == 0) {
-                    PWL_LOG_ERR("Switch to factboot ERROR, Do GPIO reset");
-                    pwl_core_call_gpio_reset_method_sync (gp_proxy, NULL, NULL);
+                    PWL_LOG_ERR("Switch to fastboot cmd ERROR");
+                    g_is_fastboot_cmd_error = TRUE;
                 } 
 #if AT_OVER_MBIM_CONTROL_MSG
                 send_message_queue(PWL_CID_SUSPEND_MBIM_RECV);
 #endif
                 break;
             case PWL_CID_CHECK_OEM_PRI_VERSION:
-                PWL_LOG_DEBUG("OEM VER: %s", message.response);
-                break;
-            case PWL_CID_GET_PREF_CARRIER:
-                if (DEBUG) PWL_LOG_DEBUG("PREF Carrier: %s", message.response);
-                char *sub_result = strstr(message.response, "preferred carrier name: ");
-                if (sub_result)
-                {
-                    int index = 0;
-                    int start_pos = sub_result - message.response + strlen("preferred carrier name:  ");
-                    sub_result = strstr(message.response, "preferred config name");
-                    int end_pos = sub_result - message.response;
-                    int sub_str_size = end_pos - start_pos - 2;
-                    strncpy(g_pref_carrier, &message.response[start_pos], sub_str_size);
-                    for (int n=0; n < MAX_PREFFERED_CARRIER_NUMBER; n++)
-                    {
-                        if (DEBUG) PWL_LOG_DEBUG("Compare: %s with %s", g_pref_carrier, g_preferred_carriers[n]);
-                        if (strcasecmp(g_pref_carrier, g_preferred_carriers[n]) == 0)
-                            g_pref_carrier_id = n;
+                if (message.status == PWL_CID_STATUS_OK) {
+                    if (DEBUG) PWL_LOG_DEBUG("OEM VER: %s", message.response);
+                    gchar* found = strstr(message.response, "Revision: ");
+                    if (found != NULL) {
+                        gchar* ver = found + strlen("Revision: ");
+                        strncpy(g_oem_pri_ver, ver, OEM_PRI_VERSION_LENGTH - 1);
+                        PWL_LOG_INFO("OEM VER: %s", g_oem_pri_ver);
+                    } else {
+                        PWL_LOG_ERR("Failed to get oem pri version!");
                     }
                 }
-                else
-                {
-                    PWL_LOG_ERR("Can't find preferred carrier!");
-                    // return -1;
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_PREF_CARRIER:
+                if (message.status == PWL_CID_STATUS_OK) {
+                    if (DEBUG) PWL_LOG_DEBUG("PREF Carrier: %s", message.response);
+                    char *sub_result = strstr(message.response, "preferred carrier name: ");
+                    if (sub_result) {
+                        int index = 0;
+                        int start_pos = sub_result - message.response + strlen("preferred carrier name:  ");
+                        sub_result = strstr(message.response, "preferred config name");
+                        int end_pos = sub_result - message.response;
+                        int sub_str_size = end_pos - start_pos - 2;
+                        strncpy(g_pref_carrier, &message.response[start_pos], sub_str_size);
+                        for (int n=0; n < MAX_PREFFERED_CARRIER_NUMBER; n++) {
+                            if (DEBUG) PWL_LOG_DEBUG("Compare: %s with %s", g_pref_carrier, g_preferred_carriers[n]);
+                            if (strcasecmp(g_pref_carrier, g_preferred_carriers[n]) == 0)
+                                g_pref_carrier_id = n;
+                        }
+                    } else {
+                        PWL_LOG_ERR("Can't find preferred carrier!");
+                    }
                 }
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_GET_SKUID:
-                strcpy(g_skuid, message.response);
+                if (message.status == PWL_CID_STATUS_OK) {
+                    strcpy(g_skuid, message.response);
+                } else {
+                    memset(g_skuid, 0, sizeof(g_skuid));
+                }
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_DEL_TUNE_CODE:
-                PWL_LOG_DEBUG("Del tune code result: %s", message.response);
+                if (message.status == PWL_CID_STATUS_OK) {
+                    gb_del_tune_code_ret = TRUE;
+                    if (DEBUG) PWL_LOG_DEBUG("Del tune code result: %s", message.response);
+                }
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_SET_PREF_CARRIER:
-                PWL_LOG_DEBUG("Set preferred carrier result: %s", message.response);
+                if (message.status == PWL_CID_STATUS_OK) {
+                    gb_set_pref_carrier_ret = TRUE;
+                    if (DEBUG) PWL_LOG_DEBUG("Set preferred carrier result: %s", message.response);
+                }
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_SET_OEM_PRI_VERSION:
-                PWL_LOG_DEBUG("Set oem pri version result: %s", message.response);
+                if (message.status == PWL_CID_STATUS_OK) {
+                    gb_set_oem_pri_ver_ret = TRUE;
+                    if (DEBUG) PWL_LOG_DEBUG("Set oem pri version result: %s", message.response);
+                }
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_GET_SIM_CARRIER:
-                PWL_LOG_DEBUG("Sim Carrier: %s", message.response);
-                strcpy(g_pref_carrier, message.response);
+                if (message.status == PWL_CID_STATUS_OK) {
+                    PWL_LOG_DEBUG("Sim Carrier: %s", message.response);
+                    strcpy(g_pref_carrier, message.response);
+                }
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_SUSPEND_MBIM_RECV:
@@ -591,10 +626,29 @@ void* msg_queue_thread_func() {
                 break;
             case PWL_CID_MADPT_RESTART:
                 pthread_cond_signal(&g_madpt_wait_cond);
+                get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &g_need_retry_fw_update);
+                if (g_need_retry_fw_update == 1) {
+                    PWL_LOG_INFO("Retry fw update");
+                    set_fw_update_status_value(NEED_RETRY_FW_UPDATE, 0);
+                    g_retry_fw_update = TRUE;
+                }
                 break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
                 break;
+        }
+    }
+
+    return NULL;
+}
+
+void* monitor_retry_func() {
+    while (TRUE) {
+        sleep(5);
+        if (g_retry_fw_update) {
+            g_retry_fw_update = FALSE;
+            PWL_LOG_INFO("Retry firmware update...");
+            start_update_process(FALSE);
         }
     }
 
@@ -710,7 +764,7 @@ int fastboot_send_command_v3( fdtl_data_t *fdtl_data, int exe_case, const char *
                 sprintf(command, "fastboot earse %s 2>&1", argv1);
                 break;
             case FASTBOOT_REBOOT_COMMAND:
-                sprintf(command, "fastboot reboot 2>&1");
+                strcpy(command, "fastboot reboot 2>&1");
                 break;
             case FASTBOOT_FLASH_COMMAND:
                 sprintf(command, "fastboot flash %s %s 2>&1", argv1, argv2);
@@ -792,7 +846,7 @@ int setup_parameter( int Argc, char **Argv )
 
            if( set_parameter <= 3 )   i++;  //Get next parameter
 
-	   break;
+        break;
         }
      }
 
@@ -1098,6 +1152,17 @@ int get_time_info( char print_time )
    return (int)current_time;
 }
 
+void close_progress_msg_box() {
+    if (g_progress_fp != NULL) {
+        g_progress_percent = 98;
+        update_progress_dialog(1, NULL, "#Modem firmware upgrade failed!\\n\\n\n");
+        g_usleep(1000*1000*3);
+        update_progress_dialog(1, NULL, "#Modem firmware upgrade failed!\\n\\n\n");
+        pclose(g_progress_fp);
+        g_progress_fp = NULL;
+    }
+}
+
 /////
 void prompt_delay( int delay_count, int interval )
 {
@@ -1198,9 +1263,16 @@ int download_process( void *argu_ptr )
 
     // Switch to fastboot in mbin
     update_progress_dialog(3, "Switch to fastboot mode.", NULL);
+    g_is_fastboot_cmd_error = FALSE;
     send_message_queue(PWL_CID_SWITCH_TO_FASTBOOT);
+
     sleep(5);
-    
+
+    if (g_is_fastboot_cmd_error) {
+        g_is_fastboot_cmd_error = FALSE;
+        return SWITCHING_TO_DOWNLOAD_MODE_FAILED;
+    }
+
     setup_temp_file_name( fdtl_data );
 
     sprintf(output_message, "\n%sSetting download port", fdtl_data->g_prefix_string );
@@ -1262,6 +1334,7 @@ int download_process( void *argu_ptr )
         fdtl_data->error_code = SWITCHING_TO_DOWNLOAD_MODE_FAILED;
         g_usleep(1000*1000*3);
         pclose(g_progress_fp);
+        g_progress_fp = NULL;
         return SWITCHING_TO_DOWNLOAD_MODE_FAILED;
     }
     //elapsed_time = get_time_info(0) - raw_time;
@@ -1478,12 +1551,12 @@ int download_process( void *argu_ptr )
     printf_fdtl_s( output_message );
     fflush(stdout);
 
-    // TODO Modem upgrade failed case popup message
     g_progress_percent = 98;
     update_progress_dialog(1, "Exit download process.", "#The Modem upgrade Success!\\n\\n\n");
     g_usleep(1000*1000*3);
     update_progress_dialog(1, "Exit download process.", "#The Modem upgrade Success!\\n\\n\n");
     pclose(g_progress_fp);
+    g_progress_fp = NULL;
     fdtl_data->download_process_state = DOWNLOAD_COMPLETED;
     fdtl_data->error_code = 1;
     return 1;
@@ -1589,7 +1662,7 @@ INOTIFY_AGAIN:
                         if (extract_update_files() == 0)
                         {
                             PWL_LOG_DEBUG("Start update process");
-                            start_udpate_process();
+                            start_update_process(FALSE);
                         }
                     }
                 }
@@ -1612,28 +1685,55 @@ INOTIFY_AGAIN:
 gint get_sim_carrier()
 {
     int err, retry = 0;
-    while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
-    {
-        err = 0;
-        send_message_queue(PWL_CID_GET_SIM_CARRIER);
-        pthread_mutex_lock(&g_mutex);
-        struct timespec timeout;
-        clock_gettime(CLOCK_REALTIME, &timeout);
-        timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+    memset(g_pref_carrier, 0, sizeof(g_pref_carrier));
 
-        int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
-        if (result == ETIMEDOUT || result != 0) {
-            PWL_LOG_ERR("Time out to get sim carrier, retry");
-            err = 1;
-        }
-        pthread_mutex_unlock(&g_mutex);
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        if (GET_TEST_SIM_CARRIER) {
+            FILE *fp;
+            char line[16];
+            if (0 == access("/opt/pwl/test_carrier", F_OK)) {
+                fp = fopen("/opt/pwl/test_carrier", "r");
 
-        if (err)
-        {
-            retry++;
-            continue;
+                if (fp == NULL) {
+                    PWL_LOG_ERR("Open file error!\n");
+                    return -1;
+                }
+                // Get test carrier from file
+                while (fgets(line, 16, fp) != NULL)
+                {
+                    if (line[0] == '\n')
+                        break;
+                    strcpy(g_pref_carrier, line);
+                    g_pref_carrier[strlen(line)] = '\0';
+                    if (DEBUG) PWL_LOG_DEBUG("Get test carrier: %s", g_pref_carrier);
+                    return 0;
+                }
+            } else {
+                PWL_LOG_ERR("Test carrier file not exist, please create and try again.");
+                return -1;
+            }
+            return -1;
+        } else {
+            err = 0;
+            send_message_queue(PWL_CID_GET_SIM_CARRIER);
+            pthread_mutex_lock(&g_mutex);
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+
+            int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+            if (result == ETIMEDOUT || result != 0) {
+                PWL_LOG_ERR("Time out to get sim carrier, retry");
+                err = 1;
+            }
+            pthread_mutex_unlock(&g_mutex);
+
+            if (err || strlen(g_pref_carrier) == 0) {
+                retry++;
+                continue;
+            }
+            return 0;
         }
-        return 0;
     }
 
     return -1;
@@ -1642,6 +1742,8 @@ gint get_sim_carrier()
 gint get_preferred_carrier()
 {
     int err, retry = 0;
+    memset(g_pref_carrier, 0, sizeof(g_pref_carrier));
+
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
     {
         err = 0;
@@ -1658,8 +1760,7 @@ gint get_preferred_carrier()
         }
         pthread_mutex_unlock(&g_mutex);
 
-        if (err)
-        {
+        if (err || strlen(g_pref_carrier) == 0) {
             retry++;
             continue;
         }
@@ -1685,8 +1786,7 @@ gint get_sku_id()
             err = 1;
         }
         pthread_mutex_unlock(&g_mutex);
-        if (err)
-        {
+        if (err || strlen(g_skuid) == 0) {
             retry++;
             continue;
         }
@@ -1741,6 +1841,7 @@ gint set_preferred_carrier()
     }
     // Set 
     int err, ret, retry = 0;
+    gb_set_pref_carrier_ret = FALSE;
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
     {
         err = 0;
@@ -1755,8 +1856,7 @@ gint set_preferred_carrier()
             err = 1;
         }
         pthread_mutex_unlock(&g_mutex);
-        if (err)
-        {
+        if (err || !gb_set_pref_carrier_ret) {
             retry++;
             continue;
         }
@@ -1769,6 +1869,7 @@ gint del_tune_code()
 {
     PWL_LOG_DEBUG("Del tune code");
     int err, ret, retry = 0;
+    gb_del_tune_code_ret = FALSE;
 
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
     {
@@ -1784,8 +1885,7 @@ gint del_tune_code()
             err = 1;
         }
         pthread_mutex_unlock(&g_mutex);
-        if (err)
-        {
+        if (err || !gb_del_tune_code_ret) {
             retry++;
             continue;
         }
@@ -1798,6 +1898,8 @@ gint set_oem_pri_version()
 {
     int err, ret, retry = 0;
     PWL_LOG_DEBUG("Set oem pri version");
+    gb_set_oem_pri_ver_ret = FALSE;
+
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
     {
         err = 0;
@@ -1813,8 +1915,7 @@ gint set_oem_pri_version()
             err = 1;
         }
         pthread_mutex_unlock(&g_mutex);
-        if (err)
-        {
+        if (err || !gb_set_oem_pri_ver_ret) {
             retry++;
             continue;
         }
@@ -1851,6 +1952,27 @@ gint get_ati_info()
     return -1;
 }
 
+gboolean get_oem_pri_version() {
+    int err, retry = 0;
+    memset(g_oem_pri_ver, 0, sizeof(g_oem_pri_ver));
+
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        err = 0;
+        send_message_queue(PWL_CID_CHECK_OEM_PRI_VERSION);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("Time out to get oem pri version, retry");
+            err = 1;
+        }
+
+        if (err || strlen(g_oem_pri_ver) == 0) {
+            retry++;
+            continue;
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
 gint setup_download_parameter(fdtl_data_t  *fdtl_data)
 {
     g_device_count = 1;
@@ -1859,14 +1981,15 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
     // Compose image list
     // fw
     g_image_file_count = 0;
-    for (int m=0; m < MAX_DOWNLOAD_FW_IMAGES; m++)
-    {
-        if (strstr(g_image_file_fw_list[m], ".dfw"))
-        {
-            strcpy(g_image_file_list[m], g_image_file_fw_list[m]);
-            g_image_file_count++;
+    if (g_has_update_include_fw_img) {
+        for (int m=0; m < MAX_DOWNLOAD_FW_IMAGES; m++) {
+            if (strstr(g_image_file_fw_list[m], ".dfw")) {
+                strcpy(g_image_file_list[m], g_image_file_fw_list[m]);
+                g_image_file_count++;
+            }
         }
     }
+
     // carrie pri
     int prefered_index = 0;
     for (int m=0; m < MAX_DOWNLOAD_FILES; m++)
@@ -1879,6 +2002,7 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
             g_image_file_count++;
         }
     }
+
     // Put prefered carrier image to last one
     char *temp_pref_carrier = malloc(strlen(g_image_file_list[prefered_index]) + 1);
     strcpy(temp_pref_carrier, g_image_file_list[prefered_index]);
@@ -1958,25 +2082,28 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
     return 0;
 }
 
-gint prepare_update_images()
-{
+gint prepare_update_images() {
     // Get fw image files in fw folder
     DIR *d;
     struct dirent *dir;
     int img_count = 0;
+    int total_image_count = 0;
     d = opendir(IMAGE_FW_FOLDER_PATH);
     char *image_full_file_name;
     int image_full_name_len;
     char temp[MAX_PATH];
     char temp_fw_image_file_list[MAX_DOWNLOAD_FILES][MAX_PATH];
-    if (d)
-    { 
-        while ((dir = readdir(d)) != NULL)
-        {   
-            if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw"))
-            {
-                if (img_count >= MAX_DOWNLOAD_FILES)
-                {
+
+    // Reset image file list
+    memset(g_image_file_fw_list, 0, sizeof(g_image_file_fw_list));
+    memset(g_image_file_carrier_list, 0, sizeof(g_image_file_carrier_list));
+    memset(g_image_file_oem_list, 0, sizeof(g_image_file_oem_list));
+    memset(g_image_file_list, 0, sizeof(g_image_file_list));
+
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw")) {
+                if (img_count >= MAX_DOWNLOAD_FILES) {
                     PWL_LOG_ERR("The max download image files is 10, please check!");
                     return -1;
                 }
@@ -1993,30 +2120,24 @@ gint prepare_update_images()
             }
         }
         closedir(d);
+    } else {
+        // PWL_LOG_ERR("Can't find fw image folder, abort!");
+        // return -1;
+        PWL_LOG_DEBUG("Can't find fw image folder, skip!");
     }
-    else
-    {
-        PWL_LOG_ERR("Can't find fw image folder, abort!");
-        return -1;
-    }
-    if (img_count == 0)
-    {
-        PWL_LOG_ERR("Can't find fw image, abort!");
-        return -1;
-    }
-    else
-    {
+
+    if (img_count > 0) {
+        total_image_count += img_count;
+        g_has_update_include_fw_img = TRUE;
         if (img_count <= MAX_DOWNLOAD_FW_IMAGES)
             g_fw_image_file_count = img_count;
         else
             g_fw_image_file_count = 3;
+
         // Sort fw image
-        for (int i=2; i <= img_count; i++)
-        {
-            for (int j=0; j<=img_count-i; j++)
-            {
-                if (strcmp(temp_fw_image_file_list[j], temp_fw_image_file_list[j+1]) > 0)
-                {
+        for (int i=2; i <= img_count; i++) {
+            for (int j=0; j<=img_count-i; j++) {
+                if (strcmp(temp_fw_image_file_list[j], temp_fw_image_file_list[j+1]) > 0) {
                     strcpy(temp, temp_fw_image_file_list[j]);
                     strcpy(temp_fw_image_file_list[j], temp_fw_image_file_list[j+1]);
                     strcpy(temp_fw_image_file_list[j+1], temp);
@@ -2024,36 +2145,28 @@ gint prepare_update_images()
             }
         }
 
-        if (g_image_file_count <= MAX_DOWNLOAD_FW_IMAGES)
-        {
+        if (g_image_file_count <= MAX_DOWNLOAD_FW_IMAGES) {
             for (int m=0; m < MAX_DOWNLOAD_FW_IMAGES; m++)
                 strcpy(g_image_file_fw_list[m], temp_fw_image_file_list[m]);
-        }
-        else
-        {
+        } else {
             for (int m=0; m < MAX_DOWNLOAD_FW_IMAGES; m++)
                 strcpy(g_image_file_fw_list[m], temp_fw_image_file_list[(g_image_file_count - MAX_DOWNLOAD_FW_IMAGES) + m]);
         }
-        if (DEBUG)
-        {
-            for (int m=0; m<MAX_DOWNLOAD_FW_IMAGES; m++)
-            {
+        if (DEBUG) {
+            for (int m=0; m<MAX_DOWNLOAD_FW_IMAGES; m++) {
                 PWL_LOG_DEBUG("fw img: %s", g_image_file_fw_list[m]);
             }
         }
     }
+
     // Get carrier_pri image files in carrier_pri folder
     d = opendir(IMAGE_CARRIER_FOLDER_PATH);
     img_count = 0;
     image_full_name_len = 0;
-    if (d)
-    {
-        while ((dir = readdir(d)) != NULL)
-        {   
-            if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw"))
-            {
-                if (img_count >= MAX_DOWNLOAD_FILES)
-                {
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw")) {
+                if (img_count >= MAX_DOWNLOAD_FILES) {
                     PWL_LOG_ERR("The max download image files is 10, please check!");
                     return -1;
                 }
@@ -2071,32 +2184,26 @@ gint prepare_update_images()
         }
         closedir(d);
     }
-    if (img_count == 0)
-    {
-        PWL_LOG_ERR("Can't find carrier_pri image, abort!");
-        return -1;
+    else {
+        PWL_LOG_DEBUG("Can't find carrier_pri image folder, skip!");
     }
-    else
-    {
-        if (DEBUG)
-        {
+
+    if (img_count > 0) {
+        total_image_count += img_count;
+        if (DEBUG) {
             for (int m=0; m<g_image_file_count; m++)
                 PWL_LOG_DEBUG("carrier img: %s", g_image_file_carrier_list[m]);
-        }        
+        }
     }
 
     // Get oem_pri image files in oem_pri folder
     d = opendir(IMAGE_OEM_FOLDER_PATH);
     img_count = 0;
     image_full_name_len = 0;
-    if (d)
-    {
-        while ((dir = readdir(d)) != NULL)
-        {   
-            if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw"))
-            {
-                if (img_count >= 10)
-                {
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw")) {
+                if (img_count >= 10) {
                     PWL_LOG_ERR("The max download image files is 10, please check!");
                     return -1;
                 }
@@ -2113,21 +2220,24 @@ gint prepare_update_images()
             }
         }
         closedir(d);
+    } else {
+        PWL_LOG_DEBUG("Can't find oem pri image folder, skip!");
     }
-    if (img_count == 0)
-    {
-        PWL_LOG_ERR("Can't find oem pri image, abort!");
-        return -1;
-    }
-    else
-    {
-        if (DEBUG)
-        {
+
+    if (img_count > 0) {
+        total_image_count += img_count;
+        if (DEBUG) {
             for (int m=0; m<g_image_file_count; m++)
                 PWL_LOG_DEBUG("oem img: %s", g_image_file_oem_list[m]);
         }
     }
-    return 0;
+
+    if (total_image_count > 0)
+        return 0;
+    else {
+        PWL_LOG_ERR("Can't find any image file, abort update!");
+        return -1;
+    }
 }
 
 gint compare_main_fw_version()
@@ -2150,15 +2260,32 @@ gint compare_main_fw_version()
             else if (strcmp(img_ver, g_current_fw_ver) < 0)
                 PWL_LOG_DEBUG("target < current");
         }
-        if (strcmp(img_ver, g_current_fw_ver) > 0)
+        if (strcmp(img_ver, g_current_fw_ver) == 0)
+            needUpdate = 0;
+        else if (strcmp(img_ver, g_current_fw_ver) > 0)
             needUpdate = 1;
     }
     free(img_ver);
     return needUpdate;
 }
 
-int start_udpate_process()
+int start_update_process(gboolean is_startup)
 {
+    // Init fw update status file
+    if (fw_update_status_init() == 0) {
+        // get_fw_update_status_value(FIND_FASTBOOT_RETRY_COUNT, &g_check_fastboot_retry_count);
+        // get_fw_update_status_value(WAIT_MODEM_PORT_RETRY_COUNT, &g_wait_modem_port_retry_count);
+        // get_fw_update_status_value(WAIT_AT_PORT_RETRY_COUNT, &g_wait_at_port_retry_count);
+        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &g_fw_update_retry_count);
+        get_fw_update_status_value(DO_HW_RESET_COUNT, &g_do_hw_reset_count);
+        get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &g_need_retry_fw_update);
+    }
+
+    if (g_fw_update_retry_count > FW_UPDATE_RETRY_TH || g_do_hw_reset_count > HW_RESET_RETRY_TH) {
+        PWL_LOG_ERR("Reached retry threadshold!!! stop firmware update!!! (%d,%d)", g_fw_update_retry_count, g_do_hw_reset_count);
+        return -1;
+    }
+
     // Init progress dialog
     g_progress_percent = 0;
     g_is_get_fw_ver = FALSE;
@@ -2167,6 +2294,7 @@ int start_udpate_process()
     while (!g_is_get_fw_ver)
     {
         send_message_queue(PWL_CID_UPDATE_FW_VER);
+        sleep(1);
         get_current_fw_version();
         PWL_LOG_DEBUG("get fw ver not ready! Retry after 5 sec");
         sleep(5);
@@ -2181,9 +2309,13 @@ int start_udpate_process()
             "%szenity --progress --text=\"%s\" --percentage=%d --auto-close --no-cancel --width=600 --title=\"%s\"",
             set_env_variable, g_progress_status, 1, "Modem Upgrade");
 
-    g_progress_fp = popen(g_progress_command,"w");
+    if (g_progress_fp != NULL) {
+        pclose(g_progress_fp);
+        g_progress_fp = NULL;
+    }
+    if (!is_startup) g_progress_fp = popen(g_progress_command,"w");
 
-    update_progress_dialog(2, "Start update process...", NULL);
+    if (!is_startup) update_progress_dialog(2, "Start update process...", NULL);
     PWL_LOG_INFO("Start update Process...");
     int need_get_preferred_carrier = 0;
     int ret = 0;
@@ -2191,19 +2323,29 @@ int start_udpate_process()
     if (get_current_fw_version() != 0)
     {
         PWL_LOG_ERR("Get current FW version error!");
+        close_progress_msg_box();
+        return -1;
+    }
+
+    // Get OEM PRI version
+    if (!get_oem_pri_version()) {
+        PWL_LOG_ERR("Get oem pri version error!");
+        close_progress_msg_box();
         return -1;
     }
 
     // Prepare update images to a list
-    update_progress_dialog(2, "Prepare update images...", NULL);
+    g_has_update_include_fw_img = FALSE;
+    if (!is_startup) update_progress_dialog(2, "Prepare update images...", NULL);
     if (prepare_update_images() != 0)
     {
         PWL_LOG_ERR("Get update images error!");
+        close_progress_msg_box();
         return -1;
     }
 
     // === Get Sim or preferred carrier first ===
-    update_progress_dialog(2, "Get carrier...", NULL);
+    if (!is_startup) update_progress_dialog(2, "Get carrier...", NULL);
     if (get_sim_carrier() != 0)
     {
         PWL_LOG_ERR("Get Sim carrier fail, get preferred carrier.");
@@ -2211,7 +2353,7 @@ int start_udpate_process()
     }
     else
     {
-        if (strcasecmp(g_pref_carrier, PWL_UNKNOW_SIM_CARRIER) == 0)
+        if (strcasecmp(g_pref_carrier, PWL_UNKNOWN_SIM_CARRIER) == 0)
         {
             PWL_LOG_DEBUG("Sim carrier is unknow, get preferred carrier.");
             need_get_preferred_carrier = 1;
@@ -2223,34 +2365,55 @@ int start_udpate_process()
         if (get_preferred_carrier() != 0)
         {
             PWL_LOG_ERR("Get preferred carrier error!");
+            close_progress_msg_box();
             return -1;
         }
     }
     PWL_LOG_DEBUG("Final switch carrier: %s", g_pref_carrier);
 
     // === Get SKU id (SSID) ===
-    update_progress_dialog(2, "Get SKU id", NULL);
+    if (!is_startup) update_progress_dialog(2, "Get SKU id", NULL);
     if (get_sku_id() != 0)
     {
         PWL_LOG_ERR("Get SKU ID error!");
+        close_progress_msg_box();
         return -1;
     }
     else
         PWL_LOG_DEBUG("SKU ID: %s", g_skuid);
 
     // === Compare main fw version ===
-    update_progress_dialog(2, "Compare fw image version", NULL);
-    if (COMPARE_FW_IMAGE_VERSION)
-    {
-        if (compare_main_fw_version() < 0)
-        {
-            PWL_LOG_ERR("Current fw image already up to date, abort! ");
-            update_progress_dialog(80, "Current fw image already up to date.", NULL);
-            g_usleep(1000*1000*3);
-            update_progress_dialog(100, "Finish update.", NULL);
-            pclose(g_progress_fp);
-            return -1;
+    if (!is_startup) update_progress_dialog(2, "Compare fw image version", NULL);
+    if (is_startup) g_progress_fp = popen(g_progress_command,"w");
+
+    gboolean up_to_date = FALSE;
+    if (g_has_update_include_fw_img) {
+        if ((COMPARE_FW_IMAGE_VERSION == 1 && compare_main_fw_version() == 0) ||
+            (COMPARE_FW_IMAGE_VERSION == 2 && compare_main_fw_version() <= 0)) {
+            up_to_date = TRUE;
         }
+    } else {
+        PWL_LOG_INFO("Update images don't include any FW image. Continue to compare oem pri version");
+
+        for (int m = 0; m < MAX_DOWNLOAD_FILES; m++) {
+            if (strstr(g_image_file_oem_list[m], g_oem_pri_ver)) {
+                PWL_LOG_INFO("oem match %s", g_image_file_oem_list[m]);
+                up_to_date = TRUE;
+                break;
+            }
+        }
+    }
+
+    if (up_to_date) {
+        PWL_LOG_INFO("Current fw image already up to date, abort! ");
+        if (!is_startup) {
+            update_progress_dialog(80, "up to date", "#Modem firmware is up to date\\n\\n\n");
+            g_usleep(1000*1000*3);
+            update_progress_dialog(100, "Finish update.", "#Modem firmware is up to date\\n\\n\n");
+        }
+        pclose(g_progress_fp);
+        g_progress_fp = NULL;
+        return -1;
     }
 
     // === Setup download parameter ===
@@ -2260,22 +2423,47 @@ int start_udpate_process()
         PWL_LOG_ERR("setup_download_parameter error");
         g_fw_update_retry_count++;
         set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
-        return -1;
+        ret = DOWNLOAD_PARAMETER_PARSING_FAILED;
+    } else {
+        // === Start Download process ===
+        ret = download_process(&fdtl_data[0]);
     }
-    // === Start Download process ===
-    ret = download_process(&fdtl_data[0]);
 
     // TODO: GPIO RESET
     if (ENABLE_GPIO_RESET)
     {
+        gboolean gpio_reset = FALSE;
         if (ret == SWITCHING_TO_DOWNLOAD_MODE_FAILED) {
             PWL_LOG_ERR("Switch to download mode fail, do GPIO reset.");
+            gpio_reset = TRUE;
+        } else if (ret == DOWNLOAD_PARAMETER_PARSING_FAILED) {
+            PWL_LOG_ERR("Download parameter parsing error.");
+        } else if (ret <= 0) {
+            PWL_LOG_ERR("Download process occure error, do GPIO reset.");
+            gpio_reset = TRUE;
+        }
+
+        if (ret <= 0) {
+            g_progress_percent = 98;
+            update_progress_dialog(1, "Reset", "#Modem download error, will automatically retry later\\n\\n\n");
+            g_usleep(1000*1000*3);
+            update_progress_dialog(1, "Reset", "#Modem download error, will automatically retry later\\n\\n\n");
+            pclose(g_progress_fp);
+            g_progress_fp = NULL;
+        }
+        if (gpio_reset) {
+            set_fw_update_status_value(NEED_RETRY_FW_UPDATE, 1);
             pwl_core_call_gpio_reset_method_sync (gp_proxy, NULL, NULL);
         }
+
+        if (fdtl_data->download_process_state == DOWNLOAD_COMPLETED || ret >= 0) {
+            PWL_LOG_DEBUG("Download completed.");
+        }
     }
-    
+
     remove(g_authenticate_key_file_name);
-    return 0;
+    if (ret >= 0) return 0;
+    else return ret;
 }
 
 gboolean gdbus_init(void) {
@@ -2314,11 +2502,11 @@ gboolean gdbus_init(void) {
         sleep(1);
     } while (FALSE == b_ret);
 
-    // if (TRUE == b_ret) {
-    //     /** Third step: Attach to dbus signals */
-    //     register_client_signal_handler(gp_proxy);
-    // }
-
+    if (TRUE == b_ret) {
+        /** Third step: Attach to dbus signals */
+        register_client_signal_handler(gp_proxy);
+    }
+    return b_ret;
 }
 
 gboolean dbus_service_is_ready(void) {
@@ -2336,134 +2524,47 @@ gboolean dbus_service_is_ready(void) {
     }
 }
 
-int count_int_length(unsigned x) {
-    if (x >= 1000000000) return 10;
-    if (x >= 100000000)  return 9;
-    if (x >= 10000000)   return 8;
-    if (x >= 1000000)    return 7;
-    if (x >= 100000)     return 6;
-    if (x >= 10000)      return 5;
-    if (x >= 1000)       return 4;
-    if (x >= 100)        return 3;
-    if (x >= 10)         return 2;
-    return 1;
-}
+//void signal_callback_retry_fw_update(const gchar* arg) {
+//    PWL_LOG_DEBUG("Receive retry fw update request!");
+//    start_update_process();
+//    return;
+//}
 
-int fw_update_status_init()
-{
-    FILE *fp;
-    char line[STATUS_LINE_LENGTH];
+//static gboolean signal_get_retry_fw_update_handler(pwlCore *object, const gchar *arg, gpointer userdata) {
+//    if (NULL != g_signal_callback.callback_retry_fw_update) {
+//        g_signal_callback.callback_retry_fw_update(arg);
+//    }
+//
+//    return TRUE;
+//}
 
-    if (0 == access(FW_UPDATE_STATUS_RECORD, F_OK)) {
-        PWL_LOG_DEBUG("File exist");
-        fp = fopen(FW_UPDATE_STATUS_RECORD, "r");
+static void cb_owner_name_changed_notify(GObject *object, GParamSpec *pspec, gpointer userdata) {
+    gchar *pname_owner = NULL;
+    pname_owner = g_dbus_proxy_get_name_owner((GDBusProxy*)object);
 
-        if (fp == NULL) {
-            PWL_LOG_ERR("Open fw_status file error!\n");
-            return -1;
-        }
-        get_fw_update_status_value(FIND_FASTBOOT_RETRY_COUNT, &g_check_fastboot_retry_count);
-        get_fw_update_status_value(WAIT_MODEM_PORT_RETRY_COUNT, &g_wait_modem_port_retry_count);
-        get_fw_update_status_value(WAIT_AT_PORT_RETRY_COUNT, &g_wait_at_port_retry_count);
-        get_fw_update_status_value(WAIT_AT_PORT_RETRY_COUNT, &g_fw_update_retry_count);
-
-        fclose(fp);
+    if (NULL != pname_owner) {
+        PWL_LOG_DEBUG("DBus service is ready!");
+        g_free(pname_owner);
     } else {
-        PWL_LOG_DEBUG("File not exist\n");
-        fp = fopen(FW_UPDATE_STATUS_RECORD, "w");
-        
-        if (fp == NULL) {
-            PWL_LOG_ERR("Create fw_status file error!\n");
-            return -1;
-        }
-        fprintf(fp, "Find_fastboot_retry_count=0\n");
-        fprintf(fp, "Wait_modem_port_retry_count=0\n");
-        fprintf(fp, "Wait_at_port_retry_count=0\n");
-        fprintf(fp, "Fw_update_retry_count=0\n");
-        
-        fclose(fp);
+        PWL_LOG_DEBUG("DBus service is NOT ready!");
+        g_free(pname_owner);
     }
-    return 0;
 }
 
-int set_fw_update_status_value(char *key, int value)
-{
-    FILE *fp;
-    char line[STATUS_LINE_LENGTH];
-    char new_value_line[STATUS_LINE_LENGTH];
-    char *new_content = NULL;
-    fp = fopen(FW_UPDATE_STATUS_RECORD, "r+");
-    int value_len, file_size, new_file_size;
-    value_len = count_int_length(value);
-    if (fp == NULL) {
-        PWL_LOG_ERR("Open fw_status file error!\n");
-        return -1;
-    }
-
-    // Check size
-    fseek(fp, 0, SEEK_END);
-    file_size = ftell(fp);
-    new_file_size = file_size + value_len + 2;
-
-    new_content = malloc(file_size + value_len + 2);
-
-    fseek(fp, 0, SEEK_SET);
-    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
-        if (strstr(line, key)) {
-            sprintf(new_value_line, "%s=%d\n", key, value);
-            strcat(new_content, new_value_line);
-        } else {
-            strcat(new_content, line);
-        }
-    }
-    fclose(fp);
-    fp = fopen(FW_UPDATE_STATUS_RECORD, "w");
-    
-    if (fp == NULL) {
-        PWL_LOG_ERR("Create fw_status file error!\n");
-        return -1;
-    }
-    fwrite(new_content, sizeof(char), strlen(new_content), fp);
-    free(new_content);
-    fclose(fp);
-    
-    return 0;
+bool register_client_signal_handler(pwlCore *p_proxy) {
+    PWL_LOG_DEBUG("register_client_signal_handler call.");
+    g_ret_signal_handler[0] = g_signal_connect(p_proxy, "notify::g-name-owner", G_CALLBACK(cb_owner_name_changed_notify), NULL);
+    //g_ret_signal_handler[1] = g_signal_connect(p_proxy, "request-retry-fw-update-signal",
+    //                                           G_CALLBACK(signal_get_retry_fw_update_handler), NULL);
+    return TRUE;
 }
 
-int get_fw_update_status_value(char *key, int *result)
-{
-    FILE *fp;
-    char line[STATUS_LINE_LENGTH];
-    char *temp_pos = NULL;
-    char value[5];
-
-    fp = fopen(FW_UPDATE_STATUS_RECORD, "r");
-    if (fp == NULL) {
-        PWL_LOG_ERR("Open fw_status file error!\n");
-        return -1;
+void registerSignalCallback(signal_callback_t *callback) {
+    if (NULL != callback) {
+        memcpy(&g_signal_callback, callback, sizeof(signal_callback_t));
+    } else {
+        PWL_LOG_DEBUG("registerSignalCallback: parameter point is NULL");
     }
-
-    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL)
-    {
-        if (strstr(line, key))
-        {
-            temp_pos = strchr(line, '=');
-            ++temp_pos;
-            strncpy(value, temp_pos, strlen(temp_pos));
-            if (NULL != strstr(value, "\r\n"))
-            {
-                PWL_LOG_DEBUG("get result string has carriage return\n");
-                value[strlen(temp_pos)-2] = '\0';
-            }
-            else
-            {
-                value[strlen(temp_pos)-1] = '\0';
-            }
-        }
-    }
-    // PWL_LOG_DEBUG("value: %s\n", value);
-    *result = atoi(value);
-    return 0;
 }
 
 gint main( int Argc, char **Argv )
@@ -2485,21 +2586,33 @@ gint main( int Argc, char **Argv )
     pthread_create(&msg_queue_thread, NULL, msg_queue_thread_func, NULL);
 
     pthread_t package_monitor_thread;
-    pthread_create(&package_monitor_thread, NULL, monitor_package_func2, NULL);    
+    pthread_create(&package_monitor_thread, NULL, monitor_package_func2, NULL);
+
+    pthread_t retry_thread;
+    pthread_create(&retry_thread, NULL, monitor_retry_func, NULL);
 
     // Check if fastboot installed
     if (ENABLE_INSTALLED_FASTBOOT_CHECK)
         g_fb_installed = check_fastboot();
 
-    // Init fw update status file
-    fw_update_status_init();
+    //signal_callback_t signal_callback;
+    //signal_callback.callback_retry_fw_update = signal_callback_retry_fw_update;
+    //registerSignalCallback(&signal_callback);
 
     gdbus_init();
     while(!dbus_service_is_ready());
     PWL_LOG_DEBUG("DBus Service is ready");
 
-    // GPIO reset test
-    // pwl_core_call_gpio_reset_method_sync (gp_proxy, NULL, NULL);
+    // wait for core & madpt ready before start checking for update
+    int need_retry = 0;
+    get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &need_retry);
+    if (!cond_wait(&g_madpt_wait_mutex, &g_madpt_wait_cond, 60)) {
+        PWL_LOG_ERR("timed out or error for madpt start, continue...");
+    }
+    if (need_retry == 1) {
+        PWL_LOG_ERR("Skip firmware file check, wait for update retry");
+        goto PREPARE_ERROR;
+    }
 
     //=========
     // TODO: 1. stop modem mgr, 2. check fcc unlock process 3. Remove g_authenticate_key_file_name file
@@ -2525,7 +2638,7 @@ gint main( int Argc, char **Argv )
         if (extract_update_files() == 0)
         {
             PWL_LOG_DEBUG("Start update process");
-            if (start_udpate_process() != 0)
+            if (start_update_process(TRUE) != 0)
             {
                 goto PREPARE_ERROR;
             }
@@ -2536,8 +2649,16 @@ gint main( int Argc, char **Argv )
             goto PREPARE_ERROR;
         }
     }
-    
+
 PREPARE_ERROR:
+    if (gp_loop != NULL) {
+        PWL_LOG_DEBUG("g_main_loop_run");
+        g_main_loop_run(gp_loop);
+    }
+    if (0 != gp_loop) {
+        g_main_loop_quit(gp_loop);
+        g_main_loop_unref(gp_loop);
+    }
     pthread_join(msg_queue_thread, NULL);
     pthread_join(package_monitor_thread, NULL);
     return rtn;
