@@ -36,6 +36,7 @@ This project is dual-licensed under the [Apache License 2.0](LICENSE-APACHE) and
 - sudo apt install pkg-config
 - sudo apt install libglib2.0-dev
 - sudo apt install libmbim-glib-dev
+- sudo apt install openssl
 
 ## 2. Build
 To compile and build services:
