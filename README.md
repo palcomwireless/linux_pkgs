@@ -26,6 +26,9 @@ This project is dual-licensed under the [Apache License 2.0](LICENSE-APACHE) and
     - chown -R root:root  `/usr/lib/x86_64-linux-gnu/ModemManager/fcc-unlock.d`
   
     - chmod 755 -R `/usr/lib/x86_64-linux-gnu/ModemManager/fcc-unlock.d`
+* For platform with SELinux mode enforcing, please manually install modemmanager_fccunlock.cil module
+  
+    - semodule -i `deb_extra/modemmanager_fccunlock.cil`
 
 # Building on Ubuntu
 
