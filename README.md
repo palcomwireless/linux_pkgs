@@ -12,7 +12,9 @@ This repository contents below pwl linux service packages to be used with WWAN m
 `FCC unlock service` performs the FCC unlock procedure for the module. (not open source)
 
 ## License
-This project is dual-licensed under the [Apache License 2.0](LICENSE-APACHE) and the [GNU General Public License v2.0](LICENSE).
+This Core, Module adapter, Preference and FW Update services are licensed under the [Apache License 2.0](LICENSE-APACHE) and the [GNU General Public License v2.0](LICENSE).
+
+And FCC unlock service is licensed under BSD-3-Clause.
 
 # Notice
 * The minimum Ubuntu version that can run this package is Ubuntu 22.04.
