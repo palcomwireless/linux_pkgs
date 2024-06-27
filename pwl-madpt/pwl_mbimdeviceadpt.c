@@ -126,15 +126,15 @@ at_command_query_cb (MbimDevice *device,
         mbim_message_unref (response);
 }
 
-void pwl_mbimdeviceadpt_at_req(gchar *command, mbim_at_resp_callback cb) {
+void pwl_mbimdeviceadpt_at_req(char *command, mbim_at_resp_callback cb) {
     pthread_mutex_lock(&g_device_mutex);
 
     if (DEBUG) PWL_LOG_DEBUG("cmd: %s", command);
 
     MbimMessage *message;
 
-    guint32 command_req_size = strlen(command) + strlen("\r\n");
-    guint8* command_req = (guint8*) malloc(command_req_size);
+    size_t command_req_size = strlen(command) + strlen("\r\n") + 1;
+    char *command_req = (char *) malloc(command_req_size);
     memset(command_req, 0, command_req_size);
     sprintf(command_req, "%s%s", command, "\r\n");
 
