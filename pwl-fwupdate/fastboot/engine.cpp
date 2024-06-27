@@ -224,8 +224,7 @@ static int match(const char* str, const char** value, unsigned count) {
 static int cb_check(Action& a, int status, const char* resp, int invert, fastboot_data_t *fastboot_data_ptr) {
     const char** value = reinterpret_cast<const char**>(a.data);
     unsigned count = a.size;
-    unsigned n;
-char gfb_msg[128];
+    char gfb_msg[128];
 
     if (status) {
         ///fprintf(stderr,"FAILED (%s)\n", resp);
