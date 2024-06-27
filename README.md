@@ -90,3 +90,6 @@ To install services
     - Control flow after GPIO HW reset
     - Enhance error case handling
     - pwl_unlock completely independent from other services
+
+- version: 3.1.0
+    - SIM carrier switch feature
