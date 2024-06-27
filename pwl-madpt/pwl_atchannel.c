@@ -25,11 +25,11 @@
 static gchar g_port[20];
 
 
-gboolean send_at_cmd(const gchar *port, const gchar *command, gchar **response) {
+gboolean send_at_cmd(const char *port, const char *command, gchar **response) {
     gboolean ret = TRUE;
 
-    guint32 command_req_size = strlen(command) + strlen("\r\n");
-    guint8* command_req = (guint8*) malloc(command_req_size);
+    size_t command_req_size = strlen(command) + strlen("\r\n") + 1;
+    char *command_req = (char *) malloc(command_req_size);
     memset(command_req, 0, command_req_size);
     sprintf(command_req, "%s%s", command, "\r\n");
 
@@ -91,8 +91,12 @@ gboolean send_at_cmd(const gchar *port, const gchar *command, gchar **response) 
     }
 
     while (select(fd + 1, &rset, NULL, NULL, &time) > 0) {
-        ssize_t len = read(fd, resp + resp_len, sizeof(resp));
+        char buffer[PWL_MQ_MAX_RESP];
+        memset(buffer, 0, sizeof(buffer));
+
+        ssize_t len = read(fd, buffer, sizeof(resp));
         if (len > 0) {
+            memcpy(resp + resp_len, buffer, len);
             resp_len += len;
             if (DEBUG) PWL_LOG_DEBUG("response read(%ld): %s", len, resp);
         } else {
@@ -107,13 +111,13 @@ gboolean send_at_cmd(const gchar *port, const gchar *command, gchar **response) 
 
     if (strlen(resp) != 0) {
         if (DEBUG) PWL_LOG_DEBUG("*Response: %s", resp);
-        *response = (gchar *)malloc(resp_len);
+        *response = (gchar *)malloc(resp_len + 1);
         if (*response == NULL) {
             PWL_LOG_ERR("AT Command response malloc failed!!");
             ret = FALSE;
             goto exit;
         }
-        memset(*response, 0, resp_len);
+        memset(*response, 0, resp_len + 1);
         memcpy(*response, resp, resp_len);
     } else {
         PWL_LOG_ERR("AT Command error!! %d", resp_len);
