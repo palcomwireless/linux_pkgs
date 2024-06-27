@@ -63,7 +63,6 @@
 
 #define FW_VERSION_LENGTH   12
 #define OEM_PRI_VERSION_LENGTH  12
-
 #define USB_SERIAL_BUF_SIZE  1024
 
 static GMainLoop *gp_loop = NULL;
@@ -81,6 +80,7 @@ char g_authenticate_key_file_name[MAX_PATH];
 char g_pref_carrier[MAX_PATH];
 char g_skuid[PWL_MAX_SKUID_SIZE] = {0};
 char *g_oem_sku_id;
+char g_device_package_ver[DEVICE_PACKAGE_VERSION_LENGTH];
 char g_current_fw_ver[FW_VERSION_LENGTH];
 char g_oem_pri_ver[OEM_PRI_VERSION_LENGTH];
 gboolean gb_del_tune_code_ret = FALSE;
@@ -91,7 +91,7 @@ gboolean g_retry_fw_update = FALSE;
 gboolean g_has_update_include_fw_img = FALSE;
 
 int g_pref_carrier_id = 0;
-int MAX_PREFFERED_CARRIER_NUMBER = 14;
+int MAX_PREFERRED_CARRIER_NUMBER = 14;
 // char *g_pref_carrier;
 
 char g_set_pref_version = 0;
@@ -270,6 +270,22 @@ char* get_oem_sku_id(char *ssid)
     else if (strcmp(ssid, "0CD9") == 0)
         return "4131001";
     else if (strcmp(ssid, "0CDA") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CF4") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CF3") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CE8") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CF7") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CF9") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CFA") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CF5") == 0)
+        return "4131001";
+    else if (strcmp(ssid, "0CF6") == 0)
         return "4131001";
     else
         return "4131001";
@@ -568,13 +584,12 @@ void* msg_queue_thread_func() {
                     if (DEBUG) PWL_LOG_DEBUG("PREF Carrier: %s", message.response);
                     char *sub_result = strstr(message.response, "preferred carrier name: ");
                     if (sub_result) {
-                        int index = 0;
                         int start_pos = sub_result - message.response + strlen("preferred carrier name:  ");
                         sub_result = strstr(message.response, "preferred config name");
                         int end_pos = sub_result - message.response;
                         int sub_str_size = end_pos - start_pos - 2;
                         strncpy(g_pref_carrier, &message.response[start_pos], sub_str_size);
-                        for (int n=0; n < MAX_PREFFERED_CARRIER_NUMBER; n++) {
+                        for (int n=0; n < MAX_PREFERRED_CARRIER_NUMBER; n++) {
                             if (DEBUG) PWL_LOG_DEBUG("Compare: %s with %s", g_pref_carrier, g_preferred_carriers[n]);
                             if (strcasecmp(g_pref_carrier, g_preferred_carriers[n]) == 0)
                                 g_pref_carrier_id = n;
@@ -659,7 +674,6 @@ int check_modem_download_port( char *modem_usb_port )
 {
     FILE *fp;
     char output[1024], input[128];
-    char *pos;
     
     sprintf( input, "ls %s 2>&1", modem_usb_port );
     memset( output, 0, 1024 );
@@ -684,6 +698,7 @@ int check_modem_download_port( char *modem_usb_port )
     } else {
         return 0;
     }
+    return 0;
 }
 
 #if 0
@@ -803,8 +818,6 @@ int fastboot_send_command_v3( fdtl_data_t *fdtl_data, int exe_case, const char *
 
 void setup_temp_file_name( fdtl_data_t *fdtl_data )
 {
-    FILE *Fp;
-    Fp = NULL;
     sprintf( fdtl_data->g_first_temp_file_name, "%s_%s.bin", gp_first_temp_file_name, fdtl_data->g_device_serial_number );
     sprintf( fdtl_data->g_image_temp_file_name, "%s_%s.bin", gp_image_temp_file_name, fdtl_data->g_device_serial_number );
     sprintf( fdtl_data->g_pri_temp_file_name, "%s_%s.bin", gp_pri_temp_file_name, fdtl_data->g_device_serial_number );
@@ -945,7 +958,7 @@ int fastboot_flash_process_v2( fdtl_data_t *fdtl_data )
 
     int previous_pri_count = 0;
     int rtn, count, c;
-    char output_message[1024];
+    //char output_message[1024];
 
     rtn = 0;
 
@@ -1053,26 +1066,21 @@ gint get_image_version(char *image_file_name, char *ver_info)
     }
 
     int record_start = 0;
-    int record_length = 0;
 
     while( record_start < size )
     {
-        int tag = 0;
         int length = 0;
 
-        unsigned char byte_tag = v_he[record_start];
-        tag = (int)byte_tag;
         unsigned char tmp_length[2];
         memset(tmp_length, 0, sizeof(tmp_length));
         memcpy(tmp_length, v_he+record_start+1, 2);
 
         length = (tmp_length[1] << 8) + tmp_length[0];
 
-        unsigned char tmp[length];
+        char tmp[length];
         memset(tmp, 0, sizeof(tmp));
         memcpy(tmp, v_he+record_start+3, length);
 
-        memset(ver_info, 0, sizeof(ver_info));
         strncpy(ver_info, tmp, 11);
         // printf("Version: %s\n", ver_info);
         break;
@@ -1223,12 +1231,7 @@ int download_process( void *argu_ptr )
     char output_message[1024];
     unsigned char *recv_buffer;
     unsigned char *send_buffer;
-    bool open_at_usb;
     int raw_time, elapsed_time;
-    int oem_pri_reset_state;
-    int print_version;
-    int check_at_command_result = -1;
-    int result;
     int check_fastboot_count = 0;
 
     fdtl_data_t *fdtl_data;
@@ -1236,14 +1239,14 @@ int download_process( void *argu_ptr )
 
     fdtl_data->download_process_state = DOWNLOAD_START;
 
-    recv_buffer = malloc(USB_SERIAL_BUF_SIZE);
+    recv_buffer = (unsigned char *) malloc(USB_SERIAL_BUF_SIZE);
     if( recv_buffer == NULL )    
     {
         fdtl_data->download_process_state = DOWNLOAD_FAILED;
         fdtl_data->error_code = MEMORY_ALLOCATION_FAILED;
         return MEMORY_ALLOCATION_FAILED;
     }
-    send_buffer = malloc(USB_SERIAL_BUF_SIZE);
+    send_buffer = (unsigned char *) malloc(USB_SERIAL_BUF_SIZE);
     if( send_buffer == NULL )    
     {
         free(recv_buffer);
@@ -1252,12 +1255,14 @@ int download_process( void *argu_ptr )
         return MEMORY_ALLOCATION_FAILED;
     }
     /////////
+    memset(recv_buffer, 0, USB_SERIAL_BUF_SIZE);
+    memset(send_buffer, 0, USB_SERIAL_BUF_SIZE);
     fdtl_data->g_recv_buffer = recv_buffer;
     fdtl_data->g_send_buffer = send_buffer;
     strcpy( fdtl_data->g_device_serial_number, "" );
     strcpy( fdtl_data->g_device_build_id, "" );
 
-    open_at_usb = fdtl_data->g_open_at_usb = false;
+    fdtl_data->g_open_at_usb = false;
 
     raw_time = get_time_info( g_display_current_time );
 
@@ -1375,7 +1380,7 @@ int download_process( void *argu_ptr )
             // printf_fdtl_d( output_message );
             PWL_LOG_DEBUG("%sfastboot oem impref %s \n", g_image_pref_version, fdtl_data->g_prefix_string );
 
-            if( rtn = fastboot_send_command_v3( fdtl_data, FASTBOOT_OEM_COMMAND, "impref", g_image_pref_version, FASTBOOT_FLASH_PREF )  <= 0 )
+            if( (rtn = fastboot_send_command_v3( fdtl_data, FASTBOOT_OEM_COMMAND, "impref", g_image_pref_version, FASTBOOT_FLASH_PREF )) <= 0 )
             {
                 // sprintf( output_message, "\n%sSet prefer version failed: %s \n", fdtl_data->g_prefix_string,  g_image_pref_version );
                 // printf_fdtl_s( output_message );
@@ -1617,7 +1622,7 @@ void *monitor_package_func2()
         "IN_DELETE_SELF",
         "IN_MOVE_SELF"
     };
-    int errTimes = 0;
+
     int fd = -1;
     fd = inotify_init();
     if (fd < 0)
@@ -1903,7 +1908,12 @@ gint set_oem_pri_version()
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
     {
         err = 0;
-        send_message_queue_with_content(PWL_CID_SET_OEM_PRI_VERSION, g_oem_sku_id);
+        if (strstr(g_device_package_ver, "DPV")) {
+            send_message_queue_with_content(PWL_CID_SET_OEM_PRI_VERSION, g_device_package_ver);
+        } else {
+            PWL_LOG_INFO("Skip oem pri set");
+            return 0;
+        }
 
         pthread_mutex_lock(&g_mutex);
         struct timespec timeout;
@@ -1973,6 +1983,29 @@ gboolean get_oem_pri_version() {
     return FALSE;
 }
 
+int get_oem_version_from_file(char *oem_file_name, char *oem_version) {
+    char filename[strlen(oem_file_name) + 1];
+    char sar_tuner_ver[30];
+    strcpy(filename, oem_file_name);
+
+    char *p;
+    p = strtok(filename, "_");
+
+    while (p != NULL) {
+        if (!strstr(p, ".cfw")) {
+            strcpy(sar_tuner_ver, p);
+            p = strtok(NULL, "_");
+        } else {
+            break;
+        }
+    }
+
+    if (sar_tuner_ver[3] == '.') {
+        strcpy(oem_version, sar_tuner_ver);
+    }
+    return 0;
+}
+
 gint setup_download_parameter(fdtl_data_t  *fdtl_data)
 {
     g_device_count = 1;
@@ -2004,7 +2037,8 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
     }
 
     // Put prefered carrier image to last one
-    char *temp_pref_carrier = malloc(strlen(g_image_file_list[prefered_index]) + 1);
+    char *temp_pref_carrier = (char *) malloc(strlen(g_image_file_list[prefered_index]) + 1);
+    memset(temp_pref_carrier, 0, strlen(g_image_file_list[prefered_index]) + 1);
     strcpy(temp_pref_carrier, g_image_file_list[prefered_index]);
     strcpy(g_image_file_list[prefered_index], g_image_file_list[g_image_file_count - 1]);
     strcpy(g_image_file_list[g_image_file_count - 1], temp_pref_carrier);
@@ -2059,6 +2093,57 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
         }
     }
 
+    // Convert oem version to device package version
+    memset(g_device_package_ver, 0, DEVICE_PACKAGE_VERSION_LENGTH);
+    if (strlen(g_image_file_oem_list[0]) > 0) {
+        char oem_version[30];
+        char *temp_oem_pri_ver;
+
+        memset(oem_version, 0, sizeof(oem_version));
+        get_oem_version_from_file(g_image_file_list[g_image_file_count - 1], oem_version);
+
+        if (DEBUG) {
+            PWL_LOG_DEBUG("Convert oem version to device package version");
+            PWL_LOG_DEBUG("oem_version: %s", oem_version);
+        }
+
+        if (strlen(oem_version) > 0) {
+            temp_oem_pri_ver = (char *) malloc(strlen(oem_version));
+            memset(temp_oem_pri_ver, 0, strlen(oem_version));
+            strcat(g_device_package_ver, "DPV00.");
+            char ch;
+            for (int i = 0; i < strlen(oem_version); i++) {
+                if (oem_version[i] == '.' || oem_version[i] == '_') {
+                    continue;
+                } else {
+                    ch = oem_version[i];
+                    // printf("%c", ch);
+                    strncat(temp_oem_pri_ver, &ch, 1);
+                }
+            }
+            int shift_index = 0;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 2; j++) {
+                    ch = temp_oem_pri_ver[shift_index + j];
+                    // printf("%c", ch);
+                    strncat(g_device_package_ver, &ch, 1);
+                    if (j == 1 && i < 2) {
+                        ch = '.';
+                        strncat(g_device_package_ver, &ch, 1);
+                    }
+                }
+                shift_index += 2;
+            }
+            free(temp_oem_pri_ver);
+        } else {
+            strcpy(g_device_package_ver, "DPV00.00.00.01");
+            PWL_LOG_ERR("Error parsing oem version, set to default");
+        }
+        PWL_LOG_DEBUG("Device_Package: %s", g_device_package_ver);
+    } else {
+        PWL_LOG_INFO("No oem image");
+    }
+
     int rtn = decode_key(g_image_file_list[0]);
     if( rtn < 0 )
     {
@@ -2108,7 +2193,7 @@ gint prepare_update_images() {
                     return -1;
                 }
                 image_full_name_len = strlen(IMAGE_FW_FOLDER_PATH) + strlen(dir->d_name) + 1;
-                image_full_file_name = malloc(image_full_name_len);
+                image_full_file_name = (char *) malloc(image_full_name_len);
                 memset(image_full_file_name, '\0', image_full_name_len);
                 strcat(image_full_file_name, IMAGE_FW_FOLDER_PATH);
                 strcat(image_full_file_name, dir->d_name);
@@ -2171,7 +2256,7 @@ gint prepare_update_images() {
                     return -1;
                 }
                 image_full_name_len = strlen(IMAGE_CARRIER_FOLDER_PATH) + strlen(dir->d_name) + 1;
-                image_full_file_name = malloc(image_full_name_len);
+                image_full_file_name = (char *) malloc(image_full_name_len);
                 memset(image_full_file_name, '\0', image_full_name_len);
                 strcat(image_full_file_name, IMAGE_CARRIER_FOLDER_PATH);
                 strcat(image_full_file_name, dir->d_name);
@@ -2208,7 +2293,7 @@ gint prepare_update_images() {
                     return -1;
                 }
                 image_full_name_len = strlen(IMAGE_OEM_FOLDER_PATH) + strlen(dir->d_name) + 1;
-                image_full_file_name = malloc(image_full_name_len);
+                image_full_file_name = (char *) malloc(image_full_name_len);
                 memset(image_full_file_name, '\0', image_full_name_len);
                 strcat(image_full_file_name, IMAGE_OEM_FOLDER_PATH);
                 strcat(image_full_file_name, dir->d_name);
@@ -2242,10 +2327,12 @@ gint prepare_update_images() {
 
 gint compare_main_fw_version()
 {
-    char *main_fw_ver, *img_ver;
-    img_ver = malloc(FW_VERSION_LENGTH);
+    char *img_ver;
+    img_ver = (char *) malloc(FW_VERSION_LENGTH);
     int needUpdate = -1;
     
+    memset(img_ver, 0, FW_VERSION_LENGTH);
+
     for (int i=0; i<g_fw_image_file_count; i++)
     {
         get_image_version(g_image_file_fw_list[i], img_ver);
@@ -2573,9 +2660,6 @@ gint main( int Argc, char **Argv )
 
     pwl_discard_old_messages(PWL_MQ_PATH_FWUPDATE);
 
-    int rtn, err, c, need_update;
-    int parameter_rtn;
-    pthread_t download_thread;
     char output_message[1024];
 
     sprintf( output_message, "\n%s v%s\n\n", APPNAME, VERSION );
@@ -2661,5 +2745,5 @@ PREPARE_ERROR:
     }
     pthread_join(msg_queue_thread, NULL);
     pthread_join(package_monitor_thread, NULL);
-    return rtn;
+    return 0;
 }
