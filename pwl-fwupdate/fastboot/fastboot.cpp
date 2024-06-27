@@ -432,11 +432,9 @@ int check_fastboot_download_port( char *argv )
 
 int fastboot_main( int exe_case, char *argv1, char *argv2, char *argv3, int device_idx )
 {
-    bool wants_wipe = false;
     bool wants_reboot = false;
     bool skip_reboot = false;
-    bool wants_set_active = false;
-    bool erase_first = true;
+    //bool erase_first = true;
     std::string slot_override;
     std::string next_active;
 
