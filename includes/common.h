@@ -42,6 +42,7 @@
 #define DO_HW_RESET_COUNT               "Do_hw_reset_count"
 #define NEED_RETRY_FW_UPDATE            "Need_retry_fw_update"
 
+#define DEVICE_PACKAGE_VERSION_LENGTH   15
 #define FW_UPDATE_RETRY_TH              3
 #define FIND_FASTBOOT_RETRY_TH          10
 #define WAIT_MODEM_PORT_RETRY_TH        10
@@ -185,6 +186,12 @@ typedef enum {
     PWL_CID_GET_ENABLE_STATE_ENABLED,
     PWL_CID_GET_ENABLE_STATE_ERROR
 } pwl_get_enable_state_t;
+
+typedef enum {
+    PWL_SIM_STATE_UNKNOWN,
+    PWL_SIM_STATE_NOT_INSERTED,
+    PWL_SIM_STATE_INITIALIZED
+} pwl_sim_state_t;
 
 gboolean pwl_discard_old_messages(const gchar *path);
 gboolean get_host_info(const gchar *cmd, gchar *buff, gint buff_len);
