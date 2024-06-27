@@ -36,14 +36,19 @@ static signal_callback_t g_signal_callback;
 //static method_callback_t g_method_callback;
 
 //FW version info
-static char* g_main_fw_version;
-static char* g_ap_version;
-static char* g_carrier_version;
-static char* g_oem_version;
+static char *g_main_fw_version;
+static char *g_ap_version;
+static char *g_carrier_version;
+static char *g_oem_version;
 
 //SIM info
 static int g_mnc_len;
 static char g_sim_carrier[15];
+static char g_pref_carrier[MAX_PATH];
+static bool g_is_get_cimi = FALSE;
+gboolean g_is_sim_insert = FALSE;
+gboolean g_set_pref_carrier_ret = FALSE;
+gboolean g_check_sim_carrier_on_going = FALSE;
 
 static void cb_owner_name_changed_notify(GObject *object, GParamSpec *pspec, gpointer userdata);
 static bool register_client_signal_handler(pwlCore *p_proxy);
@@ -61,9 +66,10 @@ static gboolean signal_get_fw_version_handler(pwlCore *object, const gchar *arg,
     return TRUE;
 }
 
-static gboolean signal_sim_state_change_handler(pwlCore *object, const gchar *arg, gpointer userdata) {
+static gboolean signal_sim_state_change_handler(pwlCore *object, gint arg_status, gpointer userdata) {
+    PWL_LOG_DEBUG("signal_sim_state_change_handler");
     if (NULL != g_signal_callback.callback_sim_state_change) {
-        g_signal_callback.callback_sim_state_change(arg);
+        g_signal_callback.callback_sim_state_change(arg_status);
     }
 
     return TRUE;
@@ -182,7 +188,7 @@ void send_message_queue(uint32_t cid) {
 
 void signal_callback_get_fw_version(const gchar* arg) {
     PWL_LOG_DEBUG("!!! signal_callback_get_fw_version !!!");
-
+    g_check_sim_carrier_on_going = TRUE;
     for (int i = 0; i < 3; i++) {
         send_message_queue(PWL_CID_GET_FW_VER);
         if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
@@ -211,18 +217,182 @@ void signal_callback_get_fw_version(const gchar* arg) {
                     PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_CIMI]);
                 }
                 if (strlen(g_sim_carrier) > 0) {
+                    if (get_preferred_carrier() == 0) {
+                        // Compare sim carrier and preferred carrier
+                        PWL_LOG_DEBUG("Compare sim carrier: %s, pref carrier: %s", g_sim_carrier, g_pref_carrier);
+                        if (strncasecmp(g_sim_carrier, g_pref_carrier, strlen(g_sim_carrier)) != 0) {
+                            PWL_LOG_DEBUG("Set preferred carrier to: %s", g_sim_carrier);
+                            set_preferred_carrier(g_sim_carrier, 3);
+                        }
+                    }
+                    g_check_sim_carrier_on_going = FALSE;
                     break;
                 }
                 g_usleep(1000*300);
             }
+            g_check_sim_carrier_on_going = FALSE;
             break;
         }
     }
+    g_check_sim_carrier_on_going = FALSE;
     return;
 }
 
-void signal_callback_sim_state_change(const gchar* arg) {
-    PWL_LOG_DEBUG("!!! signal_callback_sim_state_change !!!");
+gint get_sim_carrier_info(int retry_delay, int retry_limit) {
+    int err, retry = 0;
+
+    // Get mnc length from CRSM
+    sleep(3);
+    while (retry < retry_limit) {
+        // Abort when sim not insert
+        if (!g_is_sim_insert) {
+            g_check_sim_carrier_on_going = FALSE;
+            return -1;
+        }
+
+        err = 0;
+        g_is_get_cimi = FALSE;
+        g_mnc_len = 0;
+        PWL_LOG_DEBUG("Get CRSM");
+        send_message_queue(PWL_CID_GET_CRSM);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("Time out to get CRSM, retry");
+            err = 1;
+        }
+        if (err || g_mnc_len <= 0) {
+            PWL_LOG_DEBUG("Get CRSM error, retry!");
+            retry++;
+            sleep(retry_delay);
+            continue;
+        }
+        break;
+    }
+
+    // Get sim carrier
+    sleep(3);
+    while (retry < retry_limit) {
+        if (!g_is_sim_insert) {
+            g_check_sim_carrier_on_going = FALSE;
+            return -1;
+        }
+        err = 0;
+        g_is_get_cimi = FALSE;
+        PWL_LOG_DEBUG("Get CIMI");
+        send_message_queue(PWL_CID_GET_CIMI);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("Time out to get CIMI, retry");
+            err = 1;
+        }
+        if (err || !g_is_get_cimi) {
+            PWL_LOG_DEBUG("Get CIMI error, retry!");
+            retry++;
+            sleep(retry_delay);
+            continue;
+        }
+        g_check_sim_carrier_on_going = FALSE;
+        return 0;
+    }
+    g_check_sim_carrier_on_going = FALSE;
+    return -1;
+}
+
+gint get_preferred_carrier()
+{
+    int err, retry = 0;
+    memset(g_pref_carrier, 0, sizeof(g_pref_carrier));
+    sleep(3);
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
+    {
+        err = 0;
+        send_message_queue(PWL_CID_GET_PREF_CARRIER);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("Time out to get pref carrier, retry");
+            err = 1;
+        }
+
+        if (err || strlen(g_pref_carrier) == 0) {
+            retry++;
+            continue;
+        }
+        return 0;
+    }
+    return -1;
+}
+
+void send_message_queue_with_content(uint32_t cid, char *content) {
+    mqd_t mq;
+    mq = mq_open(CID_DESTINATION(cid), O_WRONLY);
+
+    // message to be sent
+    msg_buffer_t message;
+    message.pwl_cid = cid;
+    message.status = PWL_CID_STATUS_NONE;
+    message.sender_id = PWL_MQ_ID_PREF;
+    strcpy(message.content, content);
+
+    // msgsnd to send message
+    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+}
+
+gint set_preferred_carrier(char *carrier, int retry_limit) {
+    int err, retry = 0;
+
+    while (retry < retry_limit) {
+        err = 0;
+        g_set_pref_carrier_ret = FALSE;
+        send_message_queue_with_content(PWL_CID_SET_PREF_CARRIER, carrier);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("Time out to get pref carrier, retry");
+            err = 1;
+        }
+
+        if (err || !g_set_pref_carrier_ret) {
+            retry++;
+            sleep(1);
+            continue;
+        }
+        return 0;
+    }
+    return -1;
+}
+
+void signal_callback_sim_state_change(gint ready_state) {
+    // PWL_LOG_DEBUG("!!! signal_callback_sim_state_change, arg: %d", arg);
+    switch (ready_state) {
+        case PWL_SIM_STATE_INITIALIZED:
+            PWL_LOG_DEBUG("Sim insert");
+            g_is_sim_insert = TRUE;
+            if (!g_check_sim_carrier_on_going) {
+                g_check_sim_carrier_on_going = TRUE;
+
+                // Try to get sim carrier
+                if (get_sim_carrier_info(PWL_PREF_GET_SIM_INFO_DELAY, PWL_PREF_CMD_RETRY_LIMIT) == 0) {
+                    if (get_preferred_carrier() == 0) {
+                        // Compare sim carrier and preferred carrier
+                        PWL_LOG_DEBUG("Compare sim carrier: %s, pref carrier: %s", g_sim_carrier, g_pref_carrier);
+                        if (strncasecmp(g_sim_carrier, g_pref_carrier, strlen(g_sim_carrier)) != 0) {
+                            PWL_LOG_DEBUG("Set preferred carrier to: %s", g_sim_carrier);
+                            set_preferred_carrier(g_sim_carrier, PWL_PREF_SET_CARRIER_RETRY_LIMIT);
+                            g_check_sim_carrier_on_going = FALSE;
+                        }
+                    }
+                } else {
+                    PWL_LOG_DEBUG("Sim not insert, abort get carrier.");
+                }
+            } else {
+                PWL_LOG_DEBUG("Sim check on going: %d", g_check_sim_carrier_on_going);
+                PWL_LOG_DEBUG("Switch carrier abort!");
+            }
+            break;
+        case PWL_SIM_STATE_NOT_INSERTED:
+            PWL_LOG_DEBUG("Sim eject");
+            g_is_sim_insert = FALSE;
+            g_check_sim_carrier_on_going = FALSE;
+            break;
+        default:
+            PWL_LOG_ERR("ready state unknown");
+            break;
+    }
     return;
 }
 
@@ -296,7 +466,7 @@ static gpointer msg_queue_thread_func(gpointer data) {
     attr.mq_maxmsg = PWL_MQ_MAX_MSG;
     attr.mq_msgsize = sizeof(message);
     attr.mq_curmsgs = 0;
-    char mnc_len_temp;
+    char mnc_len_str[2];
     char sim_mcc_mnc[2][4];
     /* create the message queue */
     mq = mq_open(PWL_MQ_PATH_PREF, O_CREAT | O_RDONLY, 0644, &attr);
@@ -351,20 +521,26 @@ static gpointer msg_queue_thread_func(gpointer data) {
                         }
                         if (match != NULL) {
                             match--;
-                            mnc_len_temp = match[0];
-                            g_mnc_len = atoi(&mnc_len_temp);
+                            memset(mnc_len_str, 0, sizeof(mnc_len_str));
+                            strncpy(mnc_len_str, match, 1);
+                            g_mnc_len = atoi(mnc_len_str);
+                            if (g_mnc_len > 3) g_mnc_len = 0;
                         }
                     }
                 }
+                if (DEBUG) PWL_LOG_DEBUG("g_mnc_len: %d", g_mnc_len);
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_GET_CIMI:
                 if (message.status == PWL_CID_STATUS_OK) {
-                    PWL_LOG_DEBUG("%s", message.response);
-                    strncpy(sim_mcc_mnc[0], message.response, 3);
-                    strncpy(sim_mcc_mnc[1], message.response + 3, g_mnc_len);
+                    if (DEBUG) PWL_LOG_DEBUG("%s", message.response);
+                    memset(sim_mcc_mnc, 0, sizeof(sim_mcc_mnc));
+                    strncpy(&sim_mcc_mnc[0][0], message.response, 3);
+                    char *mnc = message.response + 3;
+                    strncpy(&sim_mcc_mnc[1][0], mnc, g_mnc_len);
                     get_carrier_from_sim(sim_mcc_mnc[0], sim_mcc_mnc[1]);
                     PWL_LOG_DEBUG("Sim carrier: %s", g_sim_carrier);
+                    g_is_get_cimi = TRUE;
                 }
                 pthread_cond_signal(&g_cond);
                 break;
@@ -385,6 +561,35 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 }
                 else
                     PWL_LOG_DEBUG("FW version abnormal, abort!");
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_PREF_CARRIER:
+                if (message.status == PWL_CID_STATUS_OK) {
+                    if (DEBUG) PWL_LOG_DEBUG("PREF Carrier: %s", message.response);
+                    char *sub_result = strstr(message.response, "preferred carrier name: ");
+                    if (sub_result) {
+                        int start_pos = sub_result - message.response + strlen("preferred carrier name:  ");
+                        sub_result = strstr(message.response, "preferred config name");
+                        int end_pos = sub_result - message.response;
+                        int sub_str_size = end_pos - start_pos - 2;
+                        strncpy(g_pref_carrier, &message.response[start_pos], sub_str_size);
+                        // for (int n = 0; n < MAX_PREFERRED_CARRIER_NUMBER; n++) {
+                        //     if (DEBUG) PWL_LOG_DEBUG("Compare: %s with %s", g_pref_carrier, g_preferred_carriers[n]);
+                        //     if (strcasecmp(g_pref_carrier, g_preferred_carriers[n]) == 0)
+                        //         g_pref_carrier_id = n;
+                        // }
+                        PWL_LOG_DEBUG("Preferred carrier: %s", g_pref_carrier);
+                    } else {
+                        PWL_LOG_ERR("Can't find preferred carrier!");
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_SET_PREF_CARRIER:
+                if (message.status == PWL_CID_STATUS_OK) {
+                    g_set_pref_carrier_ret = TRUE;
+                    if (DEBUG) PWL_LOG_DEBUG("Set preferred carrier result: %s", message.response);
+                }
                 pthread_cond_signal(&g_cond);
                 break;
             default:
@@ -421,7 +626,7 @@ void split_fw_versions(char *fw_version) {
     }
 
     splitted_str = strtok(fw_version, "_");
-    while (splitted_str != NULL)
+    while (i < 4)
     {
         version_array[i] = splitted_str;
         splitted_str = strtok(NULL, "_");
@@ -430,10 +635,10 @@ void split_fw_versions(char *fw_version) {
 
     if (version_array[0] != NULL && version_array[1] != NULL &&
         version_array[2] != NULL && version_array[3] != NULL) {
-        g_main_fw_version = malloc(strlen(version_array[0]));
-        g_ap_version = malloc(strlen(version_array[1]));
-        g_carrier_version = malloc(strlen(version_array[2]));
-        g_oem_version = malloc(strlen(version_array[3]));
+        g_main_fw_version = (char *) malloc(strlen(version_array[0]) + 1);
+        g_ap_version = (char *) malloc(strlen(version_array[1]) + 1);
+        g_carrier_version = (char *) malloc(strlen(version_array[2]) + 1);
+        g_oem_version = (char *) malloc(strlen(version_array[3]) + 1);
         strcpy(g_main_fw_version, version_array[0]);
         strcpy(g_ap_version, version_array[1]);
         strcpy(g_carrier_version, version_array[2]);
