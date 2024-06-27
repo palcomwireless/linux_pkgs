@@ -95,7 +95,7 @@ int start_flash_image_file( char *image_file, char *gp_first_temp_file_name )
 
 void get_offset_and_size( char *StrBuf, int *offset, int *size )
 { 
-   char *pos, *next_pos, *pos_shift;
+   char *pos, *next_pos;
    int len, c;
    char transfer_string[64];
    char src_string_buf[FAST_BOOT_RETURN_STR_LEN];
@@ -148,7 +148,7 @@ int post_process_fastboot( fdtl_data_t *fdtl_data, FILE *fastboot_fp, int flash_
     char *fastboot_return_string;
     const char *fb_rtn_str;
    
-    fastboot_return_string = malloc(FAST_BOOT_RETURN_STR_LEN);
+    fastboot_return_string = (char *) malloc(FAST_BOOT_RETURN_STR_LEN);
     if( fastboot_return_string == NULL )   
     {
         sprintf( output_message, "\n%smemory allocate failed --  fastboot_return_string\n", fdtl_data->g_prefix_string );
