@@ -24,6 +24,7 @@
     </signal>
 
     <signal name="SubscriberReadyStateChange">
+        <arg name="status" type="i" />
     </signal>
 
     <signal name="RequestRetryFwUpdateSignal">
