@@ -83,5 +83,6 @@ gint get_ati_info();
 char *get_test_sku_id();
 void signal_callback_retry_fw_update(const gchar* arg);
 void registerSignalCallback(signal_callback_t *callback);
+int get_oem_version_from_file(char *oem_file_name, char *oem_version);
 
 #endif
