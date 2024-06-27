@@ -21,10 +21,13 @@
 #include "CoreGdbusGenerated.h"
 
 #define RET_SIGNAL_HANDLE_SIZE 4
-
+#define PWL_PREF_CMD_RETRY_LIMIT 12
+#define PWL_PREF_GET_SIM_INFO_DELAY 5
+#define PWL_PREF_SET_CARRIER_RETRY_LIMIT 3
+#define MAX_PATH  260
 
 typedef void (*signal_get_fw_version_callback)(const gchar*);
-typedef void (*signal_get_sub_state_change_callback)(const gchar*);
+typedef void (*signal_get_sub_state_change_callback)(gint arg_status);
 
 typedef struct {
     signal_get_fw_version_callback callback_get_fw_version;
@@ -32,5 +35,7 @@ typedef struct {
 } signal_callback_t;
 
 void split_fw_versions(char *fw_version);
-
+gint get_sim_carrier_info(int retry_delay, int retry_limit);
+gint get_preferred_carrier();
+gint set_preferred_carrier(char *carrier, int retry_limit);
 #endif
