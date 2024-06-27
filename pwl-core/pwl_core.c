@@ -23,6 +23,8 @@
 #include "log.h"
 #include "pwl_core.h"
 
+static gpointer mbim_device_thread(gpointer data);
+
 static GMainLoop *gp_loop;
 static pwlCore *gp_skeleton = NULL;
 
@@ -52,13 +54,6 @@ void send_message_queue(uint32_t cid) {
 
     // msgsnd to send message
     mq_send(mq, (gchar *)&message, sizeof(message), 0);
-}
-
-static gboolean emit_get_fw_version(gconstpointer p) {
-    PWL_LOG_DEBUG("emit_get_fw_version() is called.");
-    pwl_core_emit_get_fw_version_signal(gp_skeleton);
-
-    return FALSE;
 }
 
 static gboolean madpt_ready_method(pwlCore     *object,
@@ -269,6 +264,7 @@ int gpio_init()
     }
     pclose(fp);
     fp = NULL;
+    return 0;
 }
 
 static void bus_acquired_hdl(GDBusConnection *connection,
@@ -474,14 +470,18 @@ basic_connect_notification_subscriber_ready_status (MbimDevice           *device
         PWL_LOG_DEBUG("processed subscriber ready status notification");
     }
 
+    pwl_sim_state_t state = PWL_SIM_STATE_UNKNOWN;
+
     switch (ready_state) {
     case MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED:
         PWL_LOG_DEBUG("MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED");
         break;
     case MBIM_SUBSCRIBER_READY_STATE_INITIALIZED:
+        state = PWL_SIM_STATE_INITIALIZED;
         PWL_LOG_DEBUG("MBIM_SUBSCRIBER_READY_STATE_INITIALIZED");
         break;
     case MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED:
+        state = PWL_SIM_STATE_NOT_INSERTED;
         PWL_LOG_DEBUG("MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED");
         break;
     case MBIM_SUBSCRIBER_READY_STATE_BAD_SIM:
@@ -504,7 +504,7 @@ basic_connect_notification_subscriber_ready_status (MbimDevice           *device
         break;
     }
 
-    pwl_core_emit_subscriber_ready_state_change(gp_skeleton);
+    pwl_core_emit_subscriber_ready_state_change(gp_skeleton, state);
 
 #if (0)
     if (ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED)
@@ -620,6 +620,73 @@ ms_basic_connect_extensions_notification (MbimDevice           *device,
 }
 
 static void
+mbim_device_close_ready (MbimDevice   *dev,
+                         GAsyncResult *res)
+{
+    PWL_LOG_INFO("MBIM Device close ready");
+    GError *error = NULL;
+
+    if (!mbim_device_close_finish (dev, res, &error))
+        g_error_free (error);
+}
+
+static void
+device_close ()
+{
+    PWL_LOG_INFO("MBIM Device close");
+
+    mbim_device_close (device,
+                       5,
+                       NULL,
+                       (GAsyncReadyCallback)mbim_device_close_ready,
+                       NULL);
+
+    g_clear_object (&device);
+}
+
+static void
+mbim_device_error_cb (MbimDevice *device,
+                      GError     *error)
+{
+    if (g_error_matches (error, MBIM_PROTOCOL_ERROR, MBIM_PROTOCOL_ERROR_NOT_OPENED)) {
+        PWL_LOG_ERR("device error %s", mbim_device_get_path (device));
+        mbim_device_close_force (device, NULL);
+
+        if (cancellable)
+            g_object_unref (cancellable);
+        if (device)
+            g_object_unref (device);
+
+        cancellable = NULL;
+        device = NULL;
+
+        GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
+    }
+}
+
+static void
+mbim_device_removed_cb (MbimDevice *device)
+{
+    PWL_LOG_ERR("remove device %s", mbim_device_get_path (device));
+
+    g_signal_handlers_disconnect_by_func (device, mbim_device_error_cb, NULL);
+    g_signal_handlers_disconnect_by_func (device, mbim_device_removed_cb, NULL);
+    pwl_core_emit_subscriber_ready_state_change(gp_skeleton, PWL_SIM_STATE_NOT_INSERTED);
+    device_close();
+
+    if (cancellable)
+        g_object_unref (cancellable);
+    if (device)
+        g_object_unref (device);
+
+    cancellable = NULL;
+    device = NULL;
+
+    GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
+}
+
+
+static void
 mbim_indication_cb (MbimDevice *device,
                     MbimMessage *notification)
 {
@@ -647,12 +714,14 @@ device_open_ready (MbimDevice   *dev,
     if (!mbim_device_open_finish (dev, res, &error)) {
         PWL_LOG_ERR("error: couldn't open the MbimDevice: %s\n",
                     error->message);
+
+        GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
         return;
     }
 
     PWL_LOG_DEBUG("MBIM Device at '%s' ready",
                   mbim_device_get_path_display (dev));
-#if (0) //TODO
+
     g_signal_connect (device,
                       MBIM_DEVICE_SIGNAL_REMOVED,
                       G_CALLBACK (mbim_device_removed_cb),
@@ -662,7 +731,7 @@ device_open_ready (MbimDevice   *dev,
                       MBIM_DEVICE_SIGNAL_ERROR,
                       G_CALLBACK (mbim_device_error_cb),
                       NULL);
-#endif
+
     g_signal_connect (device,
                       MBIM_DEVICE_SIGNAL_INDICATE_STATUS,
                       G_CALLBACK (mbim_indication_cb),
@@ -681,6 +750,8 @@ device_new_ready (GObject      *unused,
     if (!device) {
         PWL_LOG_ERR("error: couldn't create MbimDevice: %s\n",
                     error->message);
+
+        GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
         return;
     }
 
