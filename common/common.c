@@ -26,7 +26,7 @@ gboolean pwl_discard_old_messages(const gchar *path) {
     mqd_t mq;
     struct mq_attr attr;
     msg_buffer_t message;
-    int msg_prio;
+    unsigned int msg_prio;
     int count = 0;
 
     // Open the message queue
@@ -82,6 +82,7 @@ gboolean filter_host_info_header(const gchar *header, gchar *info, gchar *buff, 
             return FALSE;
         }
     }
+    return FALSE;
 }
 
 void pwl_get_manufacturer(gchar *buff, gint buff_len) {
@@ -230,7 +231,7 @@ gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size) {
     return TRUE;
 }
 
-#define PWL_CMD_SET     "mbimcli -d %s -p --compal-set-at-command=\"%s\""
+#define PWL_CMD_SET     "mbimcli -d %s -p --compal-query-at-command=\"%s\""
 
 gboolean pwl_set_command(const gchar *command, gchar **response) {
     if (DEBUG) PWL_LOG_DEBUG("Set mbim command: %s", command);
@@ -267,13 +268,13 @@ gboolean pwl_set_command(const gchar *command, gchar **response) {
     if (DEBUG) PWL_LOG_DEBUG("Response(%ld): %s", strlen(buff), buff);
 
     if (strlen(buff) > 0) {
-        *response = (gchar *)malloc(strlen(buff));
+        *response = (gchar *)malloc(strlen(buff) + 1);
         if (*response == NULL) {
             PWL_LOG_ERR("Command response malloc failed!!");
             return FALSE;
         }
-        memset(*response, 0, strlen(buff));
-        memcpy(*response, buff, strlen(buff) - 1);
+        memset(*response, 0, strlen(buff) + 1);
+        memcpy(*response, buff, strlen(buff));
     } else {
         return FALSE;
     }
@@ -358,8 +359,8 @@ int set_fw_update_status_value(char *key, int value) {
     file_size = ftell(fp);
 
     new_file_size = file_size + value_len + 1;
-    new_content = malloc(new_file_size);
-    memset(new_content, 0, sizeof(new_content));
+    new_content = (char *) malloc(new_file_size);
+    memset(new_content, 0, new_file_size);
 
     fseek(fp, 0, SEEK_SET);
     while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
