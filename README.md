@@ -93,3 +93,6 @@ To install services
 
 - version: 3.1.0
     - SIM carrier switch feature
+
+- version: 3.1.1
+    - config FORTIFY_SOURCE=3 for CMake build
