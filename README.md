@@ -96,3 +96,6 @@ To install services
 
 - version: 3.1.1
     - config FORTIFY_SOURCE=3 for CMake build
+
+- version: 3.2.0
+    - Modem AT control over MBIM
