@@ -28,11 +28,8 @@ static gpointer mbim_device_thread(gpointer data);
 static GMainLoop *gp_loop;
 static pwlCore *gp_skeleton = NULL;
 
-static gboolean device_open_proxy_flag = TRUE;
-static gboolean device_open_ms_mbimex_v2_flag = FALSE;
-static gboolean device_open_ms_mbimex_v3_flag = FALSE;
-static MbimDevice *device;
-static GCancellable *cancellable;
+static MbimDevice *g_device;
+static GCancellable *g_cancellable;
 
 // For GPIO reset
 // int g_check_fastboot_retry_count;
@@ -312,162 +309,18 @@ static void name_lost_hdl(GDBusConnection *connection,
     g_main_loop_quit(gp_loop);
 }
 
-static gboolean
-common_process_register_state (MbimDevice            *device,
-                               MbimMessage           *message,
-                               MbimNwError           *out_nw_error,
-                               GError               **error)
-{
-    MbimNwError        nw_error = 0;
-    MbimRegisterState  register_state = MBIM_REGISTER_STATE_UNKNOWN;
-    MbimDataClass      available_data_classes = 0;
-    g_autofree gchar  *provider_id = NULL;
-    g_autofree gchar  *provider_name = NULL;
-    MbimDataClass      preferred_data_classes = 0;
-    const gchar       *nw_error_str;
-    g_autofree gchar  *available_data_classes_str = NULL;
-    g_autofree gchar  *preferred_data_classes_str = NULL;
-    gboolean           is_notification;
-
-    is_notification = (mbim_message_get_message_type (message) == MBIM_MESSAGE_TYPE_INDICATE_STATUS);
-    g_assert (is_notification || (mbim_message_get_message_type (message) == MBIM_MESSAGE_TYPE_COMMAND_DONE));
-
-    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
-        if (is_notification) {
-            if (!mbim_message_ms_basic_connect_v2_register_state_notification_parse (
-                    message,
-                    &nw_error,
-                    &register_state,
-                    NULL, /* register_mode */
-                    &available_data_classes,
-                    NULL, /* current_cellular_class */
-                    &provider_id,
-                    &provider_name,
-                    NULL, /* roaming_text */
-                    NULL, /* registration_flag */
-                    &preferred_data_classes,
-                    error)) {
-                PWL_LOG_ERR("Failed processing MBIMEx v2.0 register state indication: ");
-                return FALSE;
-            }
-            PWL_LOG_DEBUG("processed MBIMEx v2.0 register state indication");
-        } else {
-            if (!mbim_message_ms_basic_connect_v2_register_state_response_parse (
-                    message,
-                    &nw_error,
-                    &register_state,
-                    NULL, /* register_mode */
-                    &available_data_classes,
-                    NULL, /* current_cellular_class */
-                    &provider_id,
-                    &provider_name,
-                    NULL, /* roaming_text */
-                    NULL, /* registration_flag */
-                    &preferred_data_classes,
-                    error)) {
-                PWL_LOG_ERR("Failed processing MBIMEx v2.0 register state response: ");
-                return FALSE;
-            }
-            PWL_LOG_DEBUG("processed MBIMEx v2.0 register state indication");
-        }
-    } else {
-        if (is_notification) {
-            if (!mbim_message_register_state_notification_parse (
-                    message,
-                    &nw_error,
-                    &register_state,
-                    NULL, /* register_mode */
-                    &available_data_classes,
-                    NULL, /* current_cellular_class */
-                    &provider_id,
-                    &provider_name,
-                    NULL, /* roaming_text */
-                    NULL, /* registration_flag */
-                    error)) {
-                PWL_LOG_ERR("Failed processing register state indication: ");
-                return FALSE;
-            }
-            PWL_LOG_DEBUG("processed register state indication");
-        } else {
-            if (!mbim_message_register_state_response_parse (
-                    message,
-                    &nw_error,
-                    &register_state,
-                    NULL, /* register_mode */
-                    &available_data_classes,
-                    NULL, /* current_cellular_class */
-                    &provider_id,
-                    &provider_name,
-                    NULL, /* roaming_text */
-                    NULL, /* registration_flag */
-                    error)) {
-                PWL_LOG_ERR("Failed processing register state response: ");
-                return FALSE;
-            }
-            PWL_LOG_DEBUG("processed register state response");
-        }
-    }
-
-    //nw_error = mm_broadband_modem_mbim_normalize_nw_error (self, nw_error);
-    //nw_error_str = mbim_nw_error_get_string (nw_error);
-    available_data_classes_str = mbim_data_class_build_string_from_mask (available_data_classes);
-    preferred_data_classes_str = mbim_data_class_build_string_from_mask (preferred_data_classes);
-
-    PWL_LOG_DEBUG("register state update:");
-    //if (nw_error_str)
-    //    PWL_LOG_DEBUG("              nw error: '%s'", nw_error_str);
-    //else
-    //    PWL_LOG_DEBUG("              nw error: '0x%x'", nw_error);
-    PWL_LOG_DEBUG("                 state: '%s'", mbim_register_state_get_string (register_state));
-    PWL_LOG_DEBUG("           provider id: '%s'", provider_id ? provider_id : "n/a");
-    PWL_LOG_DEBUG("         provider name: '%s'", provider_name ? provider_name : "n/a");
-    PWL_LOG_DEBUG("available data classes: '%s'", available_data_classes_str);
-    PWL_LOG_DEBUG("preferred data classes: '%s'", preferred_data_classes_str);
-
-
-    if (out_nw_error)
-        *out_nw_error = nw_error;
-    return TRUE;
-}
-
-static void
-basic_connect_notification_subscriber_ready_status (MbimDevice           *device,
-                                                    MbimMessage          *notification)
-{
+static void subscriber_ready_status_update(MbimDevice *dev, MbimMessage *message) {
     MbimSubscriberReadyState ready_state;
-    g_auto(GStrv)            telephone_numbers = NULL;
-    g_autoptr(GError)        error = NULL;
-    gboolean                 active_sim_event = FALSE;
+    gboolean success = FALSE;
 
-    if (mbim_device_check_ms_mbimex_version (device, 3, 0)) {
-        if (!mbim_message_ms_basic_connect_v3_subscriber_ready_status_notification_parse (
-                notification,
-                &ready_state,
-                NULL, /* flags */
-                NULL, /* subscriber id */
-                NULL, /* sim_iccid */
-                NULL, /* ready_info */
-                NULL, /* telephone_numbers_count */
-                &telephone_numbers,
-                &error)) {
-            PWL_LOG_ERR("Failed processing MBIMEx v3.0 subscriber ready status notification: %s", error->message);
-            return;
-        }
-        PWL_LOG_DEBUG("processed MBIMEx v3.0 subscriber ready status notification");
+    if (mbim_device_check_ms_mbimex_version(dev, 3, 0)) {
+        success = mbim_message_ms_basic_connect_v3_subscriber_ready_status_notification_parse(
+                  message, &ready_state, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        if (!success) return;
     } else {
-        if (!mbim_message_subscriber_ready_status_notification_parse (
-                notification,
-                &ready_state,
-                NULL, /* subscriber_id */
-                NULL, /* sim_iccid */
-                NULL, /* ready_info */
-                NULL, /* telephone_numbers_count */
-                &telephone_numbers,
-                &error)) {
-            PWL_LOG_ERR("Failed processing subscriber ready status notification: %s", error->message);
-            return;
-        }
-        PWL_LOG_DEBUG("processed subscriber ready status notification");
+        success = mbim_message_subscriber_ready_status_notification_parse(
+                  message, &ready_state, NULL, NULL, NULL, NULL, NULL, NULL);
+        if (!success) return;
     }
 
     pwl_sim_state_t state = PWL_SIM_STATE_UNKNOWN;
@@ -505,276 +358,188 @@ basic_connect_notification_subscriber_ready_status (MbimDevice           *device
     }
 
     pwl_core_emit_subscriber_ready_state_change(gp_skeleton, state);
-
-#if (0)
-    if (ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED)
-        mm_iface_modem_update_own_numbers (MM_IFACE_MODEM (self), telephone_numbers);
-
-    if ((self->priv->enabled_cache.last_ready_state != MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE &&
-         ready_state == MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE) ||
-        (self->priv->enabled_cache.last_ready_state == MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE &&
-         ready_state != MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE)) {
-        /* eSIM profiles have been added or removed, re-probe to ensure correct interfaces are exposed */
-        PWL_LOG_DEBUG("eSIM profile updates detected");
-        active_sim_event = TRUE;
-    }
-
-    if ((self->priv->enabled_cache.last_ready_state != MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED &&
-         ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED) ||
-        (self->priv->enabled_cache.last_ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED &&
-         ready_state != MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED)) {
-        /* SIM has been removed or reinserted, re-probe to ensure correct interfaces are exposed */
-        PWL_LOG_DEBUG("SIM hot swap detected");
-        active_sim_event = TRUE;
-    }
-
-    if ((self->priv->enabled_cache.last_ready_state != MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED &&
-         ready_state == MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED) ||
-        (self->priv->enabled_cache.last_ready_state == MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED &&
-         ready_state != MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED)) {
-        g_autoptr(MbimMessage) message = NULL;
-
-        /* Query which lock has changed */
-        message = mbim_message_pin_query_new (NULL);
-        mbim_device_command (device,
-                             message,
-                             10,
-                             NULL,
-                             (GAsyncReadyCallback)pin_query_after_subscriber_ready_status_ready,
-                             g_object_ref (self));
-    }
-
-    /* Ignore NOT_INITIALIZED state when setting the last_ready_state as it is
-     * reported regardless of whether SIM was inserted or unlocked */
-    if (ready_state != MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED) {
-        self->priv->enabled_cache.last_ready_state = ready_state;
-    }
-
-    if (active_sim_event) {
-        mm_iface_modem_process_sim_event (MM_IFACE_MODEM (self));
-    }
-#endif
 }
 
-static void
-basic_connect_notification_register_state (MbimDevice           *device,
-                                           MbimMessage          *notification)
-{
-    g_autoptr(GError)  error = NULL;
+static void register_state_update(MbimDevice *dev, MbimMessage *message) {
+    MbimRegisterState register_state = MBIM_REGISTER_STATE_UNKNOWN;
+    g_autofree gchar *provider_id = NULL;
+    g_autofree gchar *provider_name = NULL;
+    gboolean success = FALSE;
 
-    if (!common_process_register_state (device, notification, NULL, &error))
-        PWL_LOG_ERR("%s", error->message);
+    gboolean status_indicate_b = (mbim_message_get_message_type(message) == MBIM_MESSAGE_TYPE_INDICATE_STATUS);
+
+    if (mbim_device_check_ms_mbimex_version(dev, 2, 0)) {
+        if (status_indicate_b) {
+            success = mbim_message_ms_basic_connect_v2_register_state_notification_parse(
+                      message, NULL, &register_state, NULL, NULL, NULL, &provider_id,
+                      &provider_name, NULL, NULL, NULL, NULL);
+            if (!success) return;
+        } else {
+            success = mbim_message_ms_basic_connect_v2_register_state_response_parse(
+                      message, NULL, &register_state, NULL, NULL,  NULL,  &provider_id,
+                      &provider_name, NULL, NULL, NULL, NULL);
+            if (!success) return;
+        }
+    } else {
+        if (status_indicate_b) {
+            success = mbim_message_register_state_notification_parse(message,
+                      NULL,  &register_state, NULL, NULL, NULL, &provider_id,
+                      &provider_name, NULL, NULL, NULL);
+            if (!success) return;
+        } else {
+            success = mbim_message_register_state_response_parse(message, NULL,
+                      &register_state, NULL, NULL, NULL, &provider_id,
+                      &provider_name, NULL, NULL, NULL);
+            if (!success) return;
+        }
+    }
+
+    if (DEBUG) PWL_LOG_DEBUG("register state update %s %s %s",
+                              mbim_register_state_get_string(register_state),
+                              provider_id, provider_name);
 }
 
-static void
-basic_connect_notification (MbimDevice           *device,
-                            MbimMessage          *notification)
-{
-    switch (mbim_message_indicate_status_get_cid (notification)) {
-    case MBIM_CID_BASIC_CONNECT_SIGNAL_STATE:
-        PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_SIGNAL_STATE");
-        break;
-    case MBIM_CID_BASIC_CONNECT_REGISTER_STATE:
-        PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_REGISTER_STATE");
-        basic_connect_notification_register_state (device, notification);
-        break;
-    case MBIM_CID_BASIC_CONNECT_CONNECT:
-        PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_CONNECT");
-        break;
-    case MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS:
-        PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS");
-        basic_connect_notification_subscriber_ready_status (device, notification);
-        break;
-    case MBIM_CID_BASIC_CONNECT_PACKET_SERVICE:
-        PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_PACKET_SERVICE");
-        break;
-    case MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS:
-        PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS");
-    case MBIM_CID_BASIC_CONNECT_IP_CONFIGURATION:
-        PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_IP_CONFIGURATION");
-        /* Ignored at modem level, only managed by bearer if waiting for async SLAAC results */
-    default:
-        PWL_LOG_ERR("basic connect indicate cid unknown");
-        break;
+static void basic_connect_cb(MbimDevice *dev, MbimMessage *message) {
+    switch (mbim_message_indicate_status_get_cid(message)) {
+        case MBIM_CID_BASIC_CONNECT_SIGNAL_STATE:
+            if (DEBUG) PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_SIGNAL_STATE");
+            break;
+        case MBIM_CID_BASIC_CONNECT_REGISTER_STATE:
+            if (DEBUG) PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_REGISTER_STATE");
+            if (DEBUG) register_state_update(dev, message);
+            break;
+        case MBIM_CID_BASIC_CONNECT_CONNECT:
+            if (DEBUG) PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_CONNECT");
+            break;
+        case MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS:
+            if (DEBUG) PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS");
+            subscriber_ready_status_update(dev, message);
+            break;
+        case MBIM_CID_BASIC_CONNECT_PACKET_SERVICE:
+            if (DEBUG) PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_PACKET_SERVICE");
+            break;
+        case MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS:
+            if (DEBUG) PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS");
+        case MBIM_CID_BASIC_CONNECT_IP_CONFIGURATION:
+            if (DEBUG) PWL_LOG_DEBUG("MBIM_CID_BASIC_CONNECT_IP_CONFIGURATION");
+        default:
+            if (DEBUG) PWL_LOG_ERR("basic connect indicate cid unknown");
+            break;
     }
 }
 
-static void
-ms_basic_connect_extensions_notification (MbimDevice           *device,
-                                          MbimMessage          *notification)
-{
-    switch (mbim_message_indicate_status_get_cid (notification)) {
-    case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PCO:
-        PWL_LOG_DEBUG("MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PCO");
-        break;
-    case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_LTE_ATTACH_INFO:
-        PWL_LOG_DEBUG("MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_LTE_ATTACH_INFO");
-        break;
-    case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_SLOT_INFO_STATUS:
-        PWL_LOG_DEBUG("MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_SLOT_INFO_STATUS");
-        break;
-    default:
-        PWL_LOG_ERR("ms basic connect extensions indicate cid unknown");
-        break;
-    }
-}
-
-static void
-mbim_device_close_ready (MbimDevice   *dev,
-                         GAsyncResult *res)
-{
-    PWL_LOG_INFO("MBIM Device close ready");
+static void mbim_device_close_cb(MbimDevice *dev, GAsyncResult *res) {
+    PWL_LOG_INFO("MBIM Device close cb");
     GError *error = NULL;
 
-    if (!mbim_device_close_finish (dev, res, &error))
-        g_error_free (error);
+    if (!mbim_device_close_finish(dev, res, &error))
+        g_error_free(error);
 }
 
-static void
-device_close ()
-{
+static void device_close() {
     PWL_LOG_INFO("MBIM Device close");
 
-    mbim_device_close (device,
-                       5,
-                       NULL,
-                       (GAsyncReadyCallback)mbim_device_close_ready,
-                       NULL);
+    mbim_device_close(g_device, PWL_CLOSE_MBIM_TIMEOUT_SEC, NULL,
+                     (GAsyncReadyCallback) mbim_device_close_cb, NULL);
 
-    g_clear_object (&device);
+    g_clear_object(&g_device);
 }
 
-static void
-mbim_device_error_cb (MbimDevice *device,
-                      GError     *error)
-{
-    if (g_error_matches (error, MBIM_PROTOCOL_ERROR, MBIM_PROTOCOL_ERROR_NOT_OPENED)) {
-        PWL_LOG_ERR("device error %s", mbim_device_get_path (device));
-        mbim_device_close_force (device, NULL);
+static void mbim_device_error_cb(MbimDevice *dev, GError *error) {
+    if (g_error_matches(error, MBIM_PROTOCOL_ERROR, MBIM_PROTOCOL_ERROR_NOT_OPENED)) {
+        PWL_LOG_ERR("device error %s", mbim_device_get_path(dev));
+        mbim_device_close_force(dev, NULL);
 
-        if (cancellable)
-            g_object_unref (cancellable);
-        if (device)
-            g_object_unref (device);
+        if (g_cancellable)
+            g_object_unref(g_cancellable);
+        if (g_device)
+            g_object_unref(g_device);
 
-        cancellable = NULL;
-        device = NULL;
+        g_cancellable = NULL;
+        g_device = NULL;
 
+        // retry
         GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
     }
 }
 
-static void
-mbim_device_removed_cb (MbimDevice *device)
-{
-    PWL_LOG_ERR("remove device %s", mbim_device_get_path (device));
+static void mbim_device_removed_cb(MbimDevice *dev) {
+    PWL_LOG_ERR("remove device %s", mbim_device_get_path(dev));
 
-    g_signal_handlers_disconnect_by_func (device, mbim_device_error_cb, NULL);
-    g_signal_handlers_disconnect_by_func (device, mbim_device_removed_cb, NULL);
+    g_signal_handlers_disconnect_by_func(dev, mbim_device_error_cb, NULL);
+    g_signal_handlers_disconnect_by_func(dev, mbim_device_removed_cb, NULL);
     pwl_core_emit_subscriber_ready_state_change(gp_skeleton, PWL_SIM_STATE_NOT_INSERTED);
     device_close();
 
-    if (cancellable)
-        g_object_unref (cancellable);
-    if (device)
-        g_object_unref (device);
+    if (g_cancellable)
+        g_object_unref(g_cancellable);
+    if (g_device)
+        g_object_unref(g_device);
 
-    cancellable = NULL;
-    device = NULL;
+    g_cancellable = NULL;
+    g_device = NULL;
 
+    // retry
     GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
 }
 
 
-static void
-mbim_indication_cb (MbimDevice *device,
-                    MbimMessage *notification)
-{
-    MbimService  service;
+static void mbim_indication_cb(MbimDevice *self, MbimMessage *message) {
+    MbimService service = mbim_message_indicate_status_get_service(message);
 
-    service = mbim_message_indicate_status_get_service (notification);
+    if (DEBUG) PWL_LOG_DEBUG("received service %s, command %s",
+                              mbim_service_get_string(service),
+                              mbim_cid_get_printable(service,
+                              mbim_message_indicate_status_get_cid(message)));
 
-    PWL_LOG_DEBUG("received notification (service '%s', command '%s')",
-                  mbim_service_get_string (service),
-                  mbim_cid_get_printable (service,
-                                          mbim_message_indicate_status_get_cid (notification)));
-
-    if (service == MBIM_SERVICE_BASIC_CONNECT)
-        basic_connect_notification (device, notification);
-    else if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS)
-        ms_basic_connect_extensions_notification (device, notification);
+    if (service == MBIM_SERVICE_BASIC_CONNECT) {
+        basic_connect_cb(self, message);
+    }
 }
 
-static void
-device_open_ready (MbimDevice   *dev,
-                   GAsyncResult *res)
-{
+static void device_open_cb(MbimDevice *dev, GAsyncResult *res) {
     GError *error = NULL;
 
-    if (!mbim_device_open_finish (dev, res, &error)) {
-        PWL_LOG_ERR("error: couldn't open the MbimDevice: %s\n",
-                    error->message);
+    if (!mbim_device_open_finish(dev, res, &error)) {
+        PWL_LOG_ERR("Couldn't open Mbim Device: %s\n", error->message);
 
+        // retry
         GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
         return;
     }
 
-    PWL_LOG_DEBUG("MBIM Device at '%s' ready",
-                  mbim_device_get_path_display (dev));
+    PWL_LOG_DEBUG("MBIM Device %s opened.", mbim_device_get_path_display(dev));
 
-    g_signal_connect (device,
-                      MBIM_DEVICE_SIGNAL_REMOVED,
-                      G_CALLBACK (mbim_device_removed_cb),
-                      NULL);
+    g_signal_connect(g_device, MBIM_DEVICE_SIGNAL_REMOVED,
+                     G_CALLBACK(mbim_device_removed_cb), NULL);
 
-    g_signal_connect (device,
-                      MBIM_DEVICE_SIGNAL_ERROR,
-                      G_CALLBACK (mbim_device_error_cb),
-                      NULL);
+    g_signal_connect(g_device, MBIM_DEVICE_SIGNAL_ERROR,
+                     G_CALLBACK(mbim_device_error_cb), NULL);
 
-    g_signal_connect (device,
-                      MBIM_DEVICE_SIGNAL_INDICATE_STATUS,
-                      G_CALLBACK (mbim_indication_cb),
-                      NULL);
+    g_signal_connect(g_device, MBIM_DEVICE_SIGNAL_INDICATE_STATUS,
+                     G_CALLBACK(mbim_indication_cb), NULL);
 }
 
 
-static void
-device_new_ready (GObject      *unused,
-                  GAsyncResult *res)
-{
+static void device_new_cb(GObject *unused, GAsyncResult *res) {
     GError *error = NULL;
-    MbimDeviceOpenFlags open_flags = MBIM_DEVICE_OPEN_FLAGS_NONE;
 
-    device = mbim_device_new_finish (res, &error);
-    if (!device) {
-        PWL_LOG_ERR("error: couldn't create MbimDevice: %s\n",
-                    error->message);
+    g_device = mbim_device_new_finish(res, &error);
+    if (!g_device) {
+        PWL_LOG_ERR("Couldn't create MbimDevice object: %s\n", error->message);
 
+        // retry
         GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
         return;
     }
 
-    /* Setup device open flags */
-    if (device_open_proxy_flag)
-        open_flags |= MBIM_DEVICE_OPEN_FLAGS_PROXY;
-    if (device_open_ms_mbimex_v2_flag)
-        open_flags |= MBIM_DEVICE_OPEN_FLAGS_MS_MBIMEX_V2;
-    if (device_open_ms_mbimex_v3_flag)
-        open_flags |= MBIM_DEVICE_OPEN_FLAGS_MS_MBIMEX_V3;
-
-    /* Open the device */
-    mbim_device_open_full (device,
-                           open_flags,
-                           30,
-                           cancellable,
-                           (GAsyncReadyCallback) device_open_ready,
-                           NULL);
+    mbim_device_open_full(g_device, MBIM_DEVICE_OPEN_FLAGS_PROXY,
+                          PWL_OPEN_MBIM_TIMEOUT_SEC, g_cancellable,
+                          (GAsyncReadyCallback) device_open_cb, NULL);
 }
 
 gboolean mbim_dbus_init(void) {
-
-    g_autoptr(GFile)   file = NULL;
+    g_autoptr(GFile) file = NULL;
 
     gchar port[20];
     memset(port, 0, sizeof(port));
@@ -783,12 +548,10 @@ gboolean mbim_dbus_init(void) {
         return FALSE;
     }
 
-    /* Create new MBIM device */
-    file = g_file_new_for_path (port);
-    cancellable = g_cancellable_new ();
+    file = g_file_new_for_path(port);
+    g_cancellable = g_cancellable_new();
 
-    /* Launch MbimDevice creation */
-    mbim_device_new (file, cancellable, (GAsyncReadyCallback)device_new_ready, NULL);
+    mbim_device_new(file, g_cancellable, (GAsyncReadyCallback) device_new_cb, NULL);
 
     return TRUE;
 }
@@ -806,14 +569,9 @@ gint main() {
 
     GThread *mbim_thread = g_thread_new("mbim_thread", mbim_device_thread, NULL);
 
-    gint owner_id = g_bus_own_name(G_BUS_TYPE_SYSTEM,
-                                   PWL_GDBUS_NAME,
-                                   G_BUS_NAME_OWNER_FLAGS_NONE,
-                                   bus_acquired_hdl,
-                                   name_acquired_hdl,
-                                   name_lost_hdl,
-                                   NULL,
-                                   NULL);
+    gint owner_id = g_bus_own_name(G_BUS_TYPE_SYSTEM, PWL_GDBUS_NAME,
+                                   G_BUS_NAME_OWNER_FLAGS_NONE, bus_acquired_hdl,
+                                   name_acquired_hdl, name_lost_hdl, NULL, NULL);
 
     if (owner_id < 0) {
         PWL_LOG_ERR("bus init failed!");
@@ -836,10 +594,10 @@ gint main() {
 
     g_main_loop_run(gp_loop);
 
-    if (cancellable)
-        g_object_unref (cancellable);
-    if (device)
-        g_object_unref (device);
+    if (g_cancellable)
+        g_object_unref(g_cancellable);
+    if (g_device)
+        g_object_unref(g_device);
 
     // de-init
     if (0 != gp_loop) {
