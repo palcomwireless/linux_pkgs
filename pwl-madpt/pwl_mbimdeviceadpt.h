@@ -23,11 +23,12 @@
 #include "libmbim-glib.h"
 #include "log.h"
 
-typedef void (*mbim_device_ready_callback)(void);
+typedef void (*mbim_device_ready_callback)(gboolean error);
 typedef void (*mbim_at_resp_callback)(const gchar*);
 
 gboolean pwl_mbimdeviceadpt_init(mbim_device_ready_callback cb);
 void pwl_mbimdeviceadpt_deinit();
 void pwl_mbimdeviceadpt_at_req(gchar *command, mbim_at_resp_callback cb);
+gboolean pwl_mbimdeviceadpt_port_wait();
 
 #endif

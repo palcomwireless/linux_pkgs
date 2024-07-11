@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.10)
 INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/includes)
 INCLUDE_DIRECTORIES(/usr/include/gio-unix-2.0)
 
-add_compile_options(-DAT_CHANNEL)
+add_compile_options(-DAT_OVER_MBIM_API)
 
 INCLUDE_DIRECTORIES(${PROJECT_BINARY_DIR}/ /usr/local/include/libmbim-glib /usr/include/libmbim-glib)
 
@@ -11,7 +11,6 @@ link_directories(${PROJECT_BINARY_DIR}/)
 
 add_executable(pwl_madpt
                pwl_madpt.c
-               pwl_mbimadpt.c
                pwl_mbimdeviceadpt.c
                pwl_atchannel.c
                ${PROJECT_SOURCE_DIR}/common/common.c

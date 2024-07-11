@@ -27,7 +27,6 @@
 #include "log.h"
 #include "pwl_atchannel.h"
 #include "pwl_madpt.h"
-#include "pwl_mbimadpt.h"
 #include "pwl_mbimdeviceadpt.h"
 
 
@@ -39,8 +38,6 @@ gchar* at_cmd_map[] = {
     "ate",
     "ati",
     "at*bfwver",
-    "",
-    "",
     "at*bboothold",
     "at*bpriid?",
     "at*bimpref?",
@@ -59,11 +56,9 @@ gchar* at_cmd_map[] = {
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_cond = PTHREAD_COND_INITIALIZER;
 
-gboolean g_restart_modem = FALSE;
 gint g_exit_code = EXIT_SUCCESS;
 pwl_at_intf_t g_at_intf = PWL_AT_INTF_NONE;
 GThread *g_mbim_recv_thread = NULL;
-gint g_mbim_fd = -1;
 uint32_t mbim_err_cnt = 0;
 char g_response[PWL_MQ_MAX_RESP];
 int g_oem_pri_state = -1;
@@ -79,16 +74,60 @@ static void mbim_device_ready_cb();
 static void mbim_at_resp_cb(const gchar* response);
 #endif
 
+gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
+    if (rsp == NULL) {
+        PWL_LOG_ERR("response empty");
+        memset(buff_ptr, '\0', buff_size);
+        return FALSE;
+    }
+
+    gchar* head = strstr(rsp, "\n");
+    gchar* start = NULL;
+    if (head != NULL) {
+        start = head + 1;
+        // check if start with more '\n'
+        while (strncmp(start, "\n", strlen("\n")) == 0) {
+            start = start + 1;
+        }
+    }
+
+    // look for OK or ERROR in response
+    gchar* end = strstr(rsp, "\r\n\r\nOK");
+    if (end == NULL)
+    {
+        end = strstr(rsp, "OK");
+        if (strstr(rsp, "ERROR") != NULL) {
+            return FALSE;
+        }
+    }
+
+    if (head == NULL || start == NULL || end == NULL) {
+        PWL_LOG_ERR("Error parsing response");
+        return FALSE;
+    }
+
+    gint size = end - start;
+    if (buff_size > strlen(start)) {
+        memset(buff_ptr, '\0', buff_size);
+        if (size == 0) { // response of just 'OK'
+            strncpy(buff_ptr, start, strlen(start));
+        } else {
+            strncpy(buff_ptr, start, size);
+        }
+        return TRUE;
+    } else {
+        PWL_LOG_ERR("Response buffer size not large enough");
+        return FALSE;
+    }
+}
+
 pwl_cid_status_t at_cmd_request(gchar *command) {
 #if defined(AT_OVER_MBIM_API)
     pwl_mbimdeviceadpt_at_req(command, mbim_at_resp_cb);
     return PWL_CID_STATUS_OK;
 
 #else
-    if (g_at_intf == PWL_AT_OVER_MBIM_CONTROL_MSG) {
-        pwl_mbimadpt_at_req(command);
-        return PWL_CID_STATUS_OK;
-    } else if (g_at_intf == PWL_AT_CHANNEL || g_at_intf == PWL_AT_OVER_MBIM_CLI) {
+    if (g_at_intf == PWL_AT_CHANNEL || g_at_intf == PWL_AT_OVER_MBIM_CLI) {
         gchar *response = NULL;
         gboolean res = FALSE;
         if (g_at_intf == PWL_AT_OVER_MBIM_CLI) {
@@ -97,7 +136,7 @@ pwl_cid_status_t at_cmd_request(gchar *command) {
             res = pwl_atchannel_at_req(command, &response);
         }
         if (res) {
-            if (!pwl_mbimadpt_resp_parsing(response, g_response, PWL_MQ_MAX_RESP)) {
+            if (!at_resp_parsing(response, g_response, PWL_MQ_MAX_RESP)) {
                 return PWL_CID_STATUS_ERROR;
             }
         } else {
@@ -113,17 +152,41 @@ pwl_cid_status_t at_cmd_request(gchar *command) {
 #endif
 }
 
+pwl_cid_status_t madpt_at_cmd_request(gchar *command) {
+    pwl_cid_status_t status;
+    status = at_cmd_request(command);
 #if defined(AT_OVER_MBIM_API)
-static void mbim_device_ready_cb() {
-    //Send signal to pwl_pref to get fw version
-    pwl_core_call_madpt_ready_method (gp_proxy, NULL, NULL, NULL);
+    mbim_error_check();
+#endif
+    return status;
+}
+
+#if defined(AT_OVER_MBIM_API)
+static void mbim_device_ready_cb(gboolean opened) {
+    if (opened) {
+        //Send signal to pwl_pref to get fw version
+        pwl_core_call_madpt_ready_method (gp_proxy, NULL, NULL, NULL);
+    }
+}
+
+void mbim_error_check() {
+    if (g_at_intf == PWL_AT_OVER_MBIM_API) {
+       if (mbim_err_cnt >= PWL_MBIM_ERR_MAX) {
+           pwl_mbimdeviceadpt_deinit();
+           pwl_mbimdeviceadpt_init(NULL);
+           sleep(3);
+           mbim_err_cnt = 0;
+       }
+   }
 }
 
 static void mbim_at_resp_cb(const gchar* response) {
     if (strcmp(response, "ERROR") == 0) {
         mbim_err_cnt = PWL_MBIM_ERR_MAX;
+    } else if (strcmp(response, "QUERY ERROR") == 0) {
+        mbim_err_cnt++;
     } else {
-        pwl_mbimadpt_resp_parsing(response, g_response, PWL_MQ_MAX_RESP);
+        at_resp_parsing(response, g_response, PWL_MQ_MAX_RESP);
         pthread_cond_signal(&g_cond);
     }
 }
@@ -219,122 +282,16 @@ void send_message_queue(uint32_t cid) {
     mq_send(mq, (gchar *)&message, sizeof(message), 0);
 }
 
-static gpointer mbim_recv_thread_func(gpointer data) {
-    gchar read_buff[MBIM_MAX_RESP_SIZE];
-    struct pollfd recv_control;
-
-    memset(&recv_control, 0, sizeof(recv_control));
-    recv_control.fd = g_mbim_fd;
-    recv_control.events = POLLIN;
-
-    while (g_mbim_fd > 0) {
-        if (poll(&recv_control, 1, 100) != -1) {
-            if (recv_control.revents & POLLIN) {
-                guint32 read_size = 0;
-                read_size = read(g_mbim_fd, read_buff, MBIM_MAX_RESP_SIZE);
-
-                if (read_size > 0) {
-                    mbim_message_header_t *msg_head;
-                    mbim_msg_type_t msg_type;
-
-                    if (read_buff == NULL || read_size == 0) {
-                        PWL_LOG_ERR("empty buffer!");
-                        continue;
-                    }
-
-                    // check the message header first
-                    msg_head = (mbim_message_header_t *)read_buff;
-                    memcpy(&msg_type, &msg_head->message_type, sizeof(mbim_msg_type_t));
-
-                    if (DEBUG) response_msg_parsing(read_buff, read_size);
-
-                    if (msg_type == MBIM_COMMAND_DONE) {
-
-                        mbim_command_done_t *cmd_done_msg = (mbim_command_done_t *)read_buff;
-                        mbim_at_cmd_resp_t *resp = (mbim_at_cmd_resp_t *)cmd_done_msg->information_buffer;
-
-                        if (strlen(resp->at_cmd_rsp) <= 0) {
-                            continue;
-                        }
-
-                        if (strlen(resp->at_cmd_rsp) >= PWL_MQ_MAX_RESP) {
-                            PWL_LOG_ERR("MQ response buffer size not enough!!");
-                        }
-
-                        if (DEBUG) {
-                            PWL_LOG_DEBUG("Response(%ld): %s", strlen(resp->at_cmd_rsp), resp->at_cmd_rsp);
-                        }
-
-                        if (cmd_done_msg->status == MBIM_STATUS_SUCCESS) {
-                            pwl_mbimadpt_resp_parsing(resp->at_cmd_rsp, g_response, PWL_MQ_MAX_RESP);
-                            pthread_cond_signal(&g_cond);
-                        }
-                    } else if (msg_type == MBIM_CLOSE_DONE) {
-                        pwl_mbimadpt_mbim_msg_signal();
-
-                        PWL_LOG_INFO("mbim recv exit");
-                        g_mbim_recv_thread = NULL;
-                        pthread_exit(NULL);
-                    } else if (msg_type == MBIM_OPEN_DONE) {
-                        PWL_LOG_DEBUG("!!! === Open Done! === ");
-                        pwl_mbimadpt_mbim_msg_signal();
-                    }
-                }
-            }
-        }
-    }
-    return ((void*)0);
-}
-
-gboolean mbim_init() {
+gboolean mbim_init(gboolean boot) {
     mbim_err_cnt = 0;
 
-    // close any previous opened port
-    if (g_mbim_fd >= 0) {
-        PWL_LOG_ERR("close any previous open mbim %d", g_mbim_fd);
-        pwl_mbimadpt_deinit_async();
-        pwl_mbimadpt_mbim_close(&g_mbim_fd);
+    mbim_device_ready_callback cb = NULL;
+    if (boot) {
+        cb = mbim_device_ready_cb;
     }
 
-    g_mbim_fd = pwl_mbimadpt_mbim_open();
-    if (g_mbim_fd < 0) {
-        PWL_LOG_ERR("mbim port open fail");
-        return FALSE;
-    } else {
-        PWL_LOG_INFO("mbim recv start");
-        g_mbim_recv_thread = g_thread_new("mbim_recv_thread", mbim_recv_thread_func, NULL);
-        if (!pwl_mbimadpt_init(g_mbim_fd))
-            return FALSE;
-    }
-
-    return TRUE;
-}
-
-gboolean mbim_open_status_check(msg_buffer_t* message) {
-    static uint32_t mbim_open_wait_cnt = 0;
-
-    // if next cid is to open mbim, then we continue to process cid
-    if (message->pwl_cid == PWL_CID_OPEN_MBIM_RECV)
-        return TRUE;
-
-    if (g_mbim_fd < 0 || mbim_err_cnt >= PWL_MBIM_ERR_MAX) {
-
-        PWL_LOG_ERR("%d Reply mbim busy to sender %s, cid is %d", mbim_open_wait_cnt,
-                    PWL_MQ_PATH(message->sender_id), message->pwl_cid);
-        send_message_reply(message->pwl_cid, PWL_MQ_ID_MADPT, message->sender_id, PWL_CID_STATUS_BUSY, "Timeout");
-
-        if (mbim_open_wait_cnt < PWL_MBIM_OPEN_WAIT_MAX && mbim_err_cnt < PWL_MBIM_ERR_MAX) {
-            // waiting for someone to open mbim, perhaps fcc unlock
-            mbim_open_wait_cnt++;
-            return FALSE;
-        } else {
-            // wait too many times, open mbim
-            PWL_LOG_ERR("Waited too many times, try to open mbim again");
-            mbim_init();
-            return FALSE;
-        }
-    } else {
-        mbim_open_wait_cnt = 0;
+    while (!pwl_mbimdeviceadpt_init(cb)) {
+        sleep(5);
     }
 
     return TRUE;
@@ -363,37 +320,14 @@ static gpointer msg_queue_thread_func(gpointer data) {
         /* receive the message */
         bytes_read = mq_receive(mq, (gchar *)&message, sizeof(message), NULL);
 
-        if (g_at_intf == PWL_AT_OVER_MBIM_CONTROL_MSG) {
-            if (!mbim_open_status_check(&message))
-                continue;
-        }
-
         print_message_info(&message);
 
         gboolean timedwait = TRUE;
         status = PWL_CID_STATUS_OK;
         memset(g_response, 0, PWL_MQ_MAX_RESP);
 
-        if (g_at_intf == PWL_AT_OVER_MBIM_CONTROL_MSG) {
-            if (message.pwl_cid == PWL_CID_SUSPEND_MBIM_RECV) {
-                pwl_mbimadpt_deinit_async();
-                timedwait = FALSE; // let mbimadpt to handle close wait
-            } else if (message.pwl_cid == PWL_CID_OPEN_MBIM_RECV) {
-                // Sleep for 3 seconds so port can be successfully
-                // find at next open request
-                sleep(3);
-
-                if (g_mbim_fd < 0) {
-                    mbim_init();
-                } else {
-                    PWL_LOG_INFO("mbim open already, skip open");
-                }
-                timedwait = FALSE; // let mbimadpt to handle open wait
-            }
-        }
-
         if (message.pwl_cid == PWL_CID_MADPT_RESTART) {
-            restart();
+            jp_fcc_config(TRUE);
             timedwait = FALSE;
         } else if (message.pwl_cid == PWL_CID_SET_PREF_CARRIER) { 
             if (DEBUG) PWL_LOG_DEBUG("PWL_CID_SET_PREF_CARRIER");
@@ -454,16 +388,10 @@ static gpointer msg_queue_thread_func(gpointer data) {
         }
 
 #if defined(AT_OVER_MBIM_API)
-        if (g_at_intf == PWL_AT_OVER_MBIM_API) {
-            if (mbim_err_cnt >= PWL_MBIM_ERR_MAX) {
-                pwl_mbimdeviceadpt_deinit();
-                pwl_mbimdeviceadpt_init(mbim_device_ready_cb);
-                mbim_err_cnt = 0;
-            }
-        }
+        mbim_error_check();
 #endif
 
-        PWL_LOG_INFO("fd (%d), total error (%d)", g_mbim_fd, mbim_err_cnt);
+        PWL_LOG_INFO("total error (%d)", mbim_err_cnt);
 
         switch (message.pwl_cid)
         {   
@@ -476,18 +404,6 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 break;
             case PWL_CID_GET_FW_VER:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
-                break;
-            case PWL_CID_SUSPEND_MBIM_RECV:
-                pwl_mbimadpt_mbim_close(&g_mbim_fd);
-
-                // Sleep for 3 seconds so port can be successfully
-                // find at next open request
-                sleep(3);
-
-                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, "OK");
-                break;
-            case PWL_CID_OPEN_MBIM_RECV:
-                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, "Mbim open done!");
                 break;
             case PWL_CID_SWITCH_TO_FASTBOOT:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, "Switch to fastboot cmd done");
@@ -522,12 +438,29 @@ static gpointer msg_queue_thread_func(gpointer data) {
     return NULL;
 }
 
+static gpointer jp_fcc_thread_func(gpointer data) {
+    int jp_fcc_config_retry = 0;
+    get_fw_update_status_value(JP_FCC_CONFIG_COUNT, &jp_fcc_config_retry);
+    PWL_LOG_INFO("jp fcc config retry %d", jp_fcc_config_retry);
+    if (jp_fcc_config_retry > 0 && jp_fcc_config_retry < JP_FCC_CONFIG_RETRY_TH) {
+        jp_fcc_config_retry++;
+        set_fw_update_status_value(JP_FCC_CONFIG_COUNT, jp_fcc_config_retry);
+        jp_fcc_config(FALSE);
+    } else {
+        PWL_LOG_INFO("wait for modem to get ready");
+        sleep(PWL_MBIM_READY_SEC);
+    }
+
+    send_message_reply(PWL_CID_MADPT_RESTART, PWL_MQ_ID_MADPT, PWL_MQ_ID_FWUPDATE, PWL_CID_STATUS_OK, "Madpt started");
+    return NULL;
+}
+
 void enable_jp_fcc_auto_reboot() {
     // enable this flag so modem will do switch when sim changed to corresponding carrier
     pwl_get_enable_state_t state = PWL_CID_GET_ENABLE_STATE_ERROR;
 
     for (gint i = 0; i < PWL_OEM_PRI_RESET_RETRY; i++) {
-        at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_JP_FCC_AUTO_REBOOT)]);
+        madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_JP_FCC_AUTO_REBOOT)]);
 
         if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
             PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_JP_FCC_AUTO_REBOOT]);
@@ -541,7 +474,7 @@ void enable_jp_fcc_auto_reboot() {
                 PWL_LOG_INFO("JP fcc auto reboot state is disabled");
 
                 // enable JP FCC Auto Reboot
-                at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_ENABLE_JP_FCC_AUTO_REBOOT)]);
+                madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_ENABLE_JP_FCC_AUTO_REBOOT)]);
 
                 if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
                     PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_ENABLE_JP_FCC_AUTO_REBOOT]);
@@ -561,7 +494,7 @@ void wait_for_modem_oem_pri_reset() {
 
     for (gint i = 0; i < PWL_OEM_PRI_RESET_RETRY; i++) {
         sleep(1);
-        at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_RESET)]);
+        madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_RESET)]);
 
         if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
             PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_OEM_PRI_RESET]);
@@ -582,165 +515,101 @@ void wait_for_modem_oem_pri_reset() {
     }
 }
 
-
-gboolean check_modem_intf() {
+void jp_fcc_config() {
     gboolean is_mbim_ready = FALSE;
+    // just after flash, wait a bit for modem to get ready
+    PWL_LOG_INFO("wait for modem to get ready");
+    sleep(PWL_MBIM_READY_SEC);
 
-    if (MADPT_FORCE_MBIMCLI) {
-        g_at_intf = PWL_AT_OVER_MBIM_CLI;
-        PWL_LOG_INFO("Force mbim cli");
-    } else if (pwl_atchannel_find_at_port()) {
-        g_at_intf = PWL_AT_CHANNEL;
-        PWL_LOG_INFO("AT Channel");
-    } else if (pwl_set_command_available()) {
-        PWL_LOG_INFO("Enabling at port by command");
-
-        gchar *response = NULL;
-        if (pwl_set_command(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_AT_UCOMP)], &response)) {
-            if (response != NULL && strstr(response, "OK") != NULL) {
-                free(response);
-                response = NULL;
-
-                if (pwl_set_command(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_RESET)], &response)) {
-                    if (response != NULL && strstr(response, "OK") != NULL) {
-                        free(response);
-                        response = NULL;
-
-                        for (int i = 0; i < 2; i++) {
-                            PWL_LOG_INFO("waiting for at port...");
-                            sleep(40);
-                            if (pwl_atchannel_find_at_port()) {
-                                g_at_intf = PWL_AT_CHANNEL;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+    // Check mbim init (timout 3 mins 6s*30)
+    for (int i = 0; i < 30; i++) {
+        if (!mbim_init(FALSE)) {
+            sleep(6);
+            continue;
         } else {
-            g_at_intf = PWL_AT_INTF_NONE;
+            is_mbim_ready = TRUE;
+            break;
         }
     }
-    PWL_LOG_INFO("g_at_intf: %d", g_at_intf);
 
-    if (g_at_intf == PWL_AT_INTF_NONE) {
-        g_at_intf = PWL_AT_OVER_MBIM_CONTROL_MSG;
-        PWL_LOG_INFO("at mbim control msg, enable at port starts");
-
-        // Check mbim init (timout 3 mins 6s*30)
-        for (int i = 0; i < 30; i++) {
-            if (!mbim_init()) {
-                sleep(6);
-                continue;
-            } else {
-                is_mbim_ready = TRUE;
-                break;
-            }
-        }
-
-        if (!is_mbim_ready) {
-            PWL_LOG_ERR("Mbim init failed, do GPIO reset.");
-            gdbus_init();
-            while(!dbus_service_is_ready());
-            PWL_LOG_DEBUG("DBus Service is ready");
-            pwl_core_call_gpio_reset_method_sync (gp_proxy, NULL, NULL);
-            // hw reset function will send PWL_CID_MADPT_RESTART msg but can't receive at this point
-            // so restart it self
-            g_exit_code = EXIT_FAILURE;
-            return TRUE;
-        } else {
-            // incase module become alive again with AT port already available
-            PWL_LOG_INFO("re-check at port existence");
-            if (pwl_atchannel_find_at_port()) {
-                pwl_mbimadpt_deinit_async();
-                pwl_mbimadpt_mbim_close(&g_mbim_fd);
-                g_at_intf = PWL_AT_CHANNEL;
-                PWL_LOG_INFO("AT Channel available");
-                return FALSE;
-            }
-        }
-
-        sleep(5); // immediatly use of mbim will cause error, wait a bit
-
-        // Stop Modem Manager since we will interfere with MBIM port
-        gint sys_res = system("systemctl stop ModemManager.service");
-        PWL_LOG_INFO("Stop Modem Manager res %d", sys_res);
-
-        enable_jp_fcc_auto_reboot();
-
-        // Check oem pri info:
-        // START(0)/NORESET(3) > do nothing
-        // INIT(1) > wait
-        // REST(2) > reset module
-        gint retry = 0;
-        while (g_oem_pri_state != OEM_PRI_UPDATE_NORESET)
-        {
-            if (retry > 10) break; // retry wait for OEM_PRI_UPDATE_RESET for 50s then exit
-
-            PWL_LOG_DEBUG("===== Get OEM pri info =====, def: %d", g_oem_pri_state);
-            at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_INFO)]);
-            sleep(5);
-            retry++;
-            g_oem_pri_state = atoi(g_response);
-            PWL_LOG_DEBUG("===== OEM info int: %d", g_oem_pri_state);
-            if (g_oem_pri_state == OEM_PRI_UPDATE_START || g_oem_pri_state == OEM_PPI_UPDATE_INIT)
-            {
-                continue;
-            }
-            else if (g_oem_pri_state == OEM_PRI_UPDATE_RESET)
-            {
-                PWL_LOG_DEBUG("===== Oem pri need reset =====");
-                wait_for_modem_oem_pri_reset();
-                break;
-            }
-            else
-            {
-                continue;
-            }
-        }
-        PWL_LOG_DEBUG("===== OEM info check END =====");
-
-
-        for (int i = 0; i < 5; i++) {
-            at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_AT_UCOMP)]);
-            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
-                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_AT_UCOMP]);
-                continue;
-            } else {
-                at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_RESET)]);
-                if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
-                    PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_RESET]);
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if (pwl_atchannel_at_port_wait()) {
-            g_at_intf = PWL_AT_CHANNEL;
-            PWL_LOG_INFO("enable at port completed, success");
-        } else {
-            PWL_LOG_INFO("enable at port completed, failed");
-        }
-
-        g_restart_modem = TRUE;
-
-        g_exit_code = EXIT_FAILURE;
-
-        return TRUE;
+    if (!is_mbim_ready) {
+        PWL_LOG_ERR("Mbim init failed, do GPIO reset.");
+        //gdbus_init();
+        //while(!dbus_service_is_ready());
+        //PWL_LOG_DEBUG("DBus Service is ready");
+        pwl_core_call_gpio_reset_method_sync (gp_proxy, NULL, NULL);
+        // hw reset function will send PWL_CID_MADPT_RESTART msg but can't receive at this point
+        // so restart it self
+        //g_exit_code = EXIT_FAILURE;
+        restart();
+        return;
     }
-    return FALSE;
+
+    sleep(5); // immediatly use of mbim will cause error, wait a bit
+
+    enable_jp_fcc_auto_reboot();
+
+    // Check oem pri info:
+    // START(0)/NORESET(3) > do nothing
+    // INIT(1) > wait
+    // REST(2) > reset module
+    gint retry = 0;
+    while (g_oem_pri_state != OEM_PRI_UPDATE_NORESET) {
+        if (retry > 10) break; // retry wait for OEM_PRI_UPDATE_RESET for 50s then exit
+
+        PWL_LOG_DEBUG("===== Get OEM pri info =====, def: %d", g_oem_pri_state);
+        madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_INFO)]);
+        sleep(5);
+        retry++;
+        g_oem_pri_state = atoi(g_response);
+        PWL_LOG_DEBUG("===== OEM info int: %d", g_oem_pri_state);
+        if (g_oem_pri_state == OEM_PRI_UPDATE_START || g_oem_pri_state == OEM_PPI_UPDATE_INIT) {
+            continue;
+        } else if (g_oem_pri_state == OEM_PRI_UPDATE_RESET) {
+            PWL_LOG_DEBUG("===== Oem pri need reset =====");
+            wait_for_modem_oem_pri_reset();
+            break;
+        } else {
+            continue;
+        }
+    }
+    PWL_LOG_DEBUG("===== OEM info check END =====");
+
+    for (int i = 0; i < 5; i++) {
+        madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_RESET)]);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_RESET]);
+        } else {
+            break;
+        }
+    }
+
+    set_fw_update_status_value(JP_FCC_CONFIG_COUNT, 0);
+
+    // wait till mbim port gone
+    for (int i = 0; i < 10; i++) {
+        gchar port[20];
+        memset(port, 0, sizeof(port));
+        if (!pwl_find_mbim_port(port, sizeof(port))) {
+            break;
+        }
+        sleep(2);
+    }
+    PWL_LOG_INFO("mbim port gone now");
+
+    if (pwl_mbimdeviceadpt_port_wait()) {
+        PWL_LOG_INFO("mbim port available now");
+    } else {
+        PWL_LOG_INFO("mbim port still not available after wait");
+    }
+
+    restart();
 }
 
 void clean_up() {
 #if defined(AT_OVER_MBIM_API)
     pwl_mbimdeviceadpt_deinit();
 #endif
-
-   if (g_restart_modem) {
-        gint sys_res = system("systemctl restart ModemManager.service");
-        PWL_LOG_INFO("Restart Modem Manager res %d", sys_res);
-   }
 }
 
 void restart() {
@@ -760,16 +629,13 @@ void restart() {
 gint main() {
     PWL_LOG_INFO("start");
 
-    if (check_modem_intf()) {
-        goto exit;
-    }
+    g_at_intf = PWL_AT_OVER_MBIM_API;
 
     pwl_discard_old_messages(PWL_MQ_PATH_MADPT);
 
 #if defined(AT_OVER_MBIM_API)
-    while (!pwl_mbimdeviceadpt_init(mbim_device_ready_cb)) {
-        sleep(5);
-    }
+    mbim_init(TRUE);
+    sleep(5);
 #endif
 
     GThread *msg_queue_thread = g_thread_new("msg_queue_thread", msg_queue_thread_func, NULL);
@@ -783,9 +649,11 @@ gint main() {
 #if !defined(AT_OVER_MBIM_API) // mbim api case need to wait for device ready first
     //Send signal to pwl_pref to get fw version
     pwl_core_call_madpt_ready_method_sync (gp_proxy, NULL, NULL);
-#endif
 
     send_message_reply(PWL_CID_MADPT_RESTART, PWL_MQ_ID_MADPT, PWL_MQ_ID_FWUPDATE, PWL_CID_STATUS_OK, "Madpt started");
+#else
+    GThread *jp_fcc_thread = g_thread_new("jp_fcc_thread", jp_fcc_thread_func, NULL);
+#endif
 
     if (gp_loop != NULL)
         g_main_loop_run(gp_loop);
