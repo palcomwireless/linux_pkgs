@@ -335,6 +335,7 @@ int fw_update_status_init() {
         fprintf(fp, "Fw_update_retry_count=0\n");
         fprintf(fp, "Do_hw_reset_count=0\n");
         fprintf(fp, "Need_retry_fw_update=0\n");
+        fprintf(fp, "jp_fcc_config_count=0\n");
         fclose(fp);
     }
     return 0;
