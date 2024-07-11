@@ -26,12 +26,13 @@
 #define MFR_NAME                        "Dell"
 
 #define PWL_CMD_TIMEOUT_SEC             5
-#define PWL_OPEN_MBIM_TIMEOUT_SEC       10
+#define PWL_OPEN_MBIM_TIMEOUT_SEC       30
+#define PWL_CLOSE_MBIM_TIMEOUT_SEC      5
+#define PWL_MBIM_READY_SEC              15
 
 #define INFO_BUFFER_SIZE                100
 #define PWL_MAX_MFR_SIZE                10 // min size for "Dell Inc."
 #define PWL_MAX_SKUID_SIZE              15
-#define PWL_MAX_OEMSKUID_SIZE           8
 
 #define STATUS_LINE_LENGTH              128
 #define FW_UPDATE_STATUS_RECORD         "/opt/pwl/firmware/fw_update_status"
@@ -41,6 +42,7 @@
 #define FW_UPDATE_RETRY_COUNT           "Fw_update_retry_count"
 #define DO_HW_RESET_COUNT               "Do_hw_reset_count"
 #define NEED_RETRY_FW_UPDATE            "Need_retry_fw_update"
+#define JP_FCC_CONFIG_COUNT             "jp_fcc_config_count"
 
 #define DEVICE_PACKAGE_VERSION_LENGTH   15
 #define FW_UPDATE_RETRY_TH              3
@@ -48,6 +50,7 @@
 #define WAIT_MODEM_PORT_RETRY_TH        10
 #define WAIT_AT_PORT_RETRY_TH           10
 #define HW_RESET_RETRY_TH               5
+#define JP_FCC_CONFIG_RETRY_TH          3
 
 #define PWL_MQ_MAX_MSG                  10
 #define PWL_MQ_MAX_CONTENT_LEN          30
@@ -99,8 +102,6 @@ typedef enum {
     PWL_CID_GET_ATE,
     PWL_CID_GET_ATI,
     PWL_CID_GET_FW_VER,
-    PWL_CID_SUSPEND_MBIM_RECV,
-    PWL_CID_OPEN_MBIM_RECV,
     PWL_CID_SWITCH_TO_FASTBOOT,
     PWL_CID_CHECK_OEM_PRI_VERSION,
     PWL_CID_GET_PREF_CARRIER,
@@ -132,8 +133,6 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_ATE] = "GET_ATE",
     [PWL_CID_GET_ATI] = "GET_ATI",
     [PWL_CID_GET_FW_VER] = "GET_FW_VER",
-    [PWL_CID_SUSPEND_MBIM_RECV] = "SUSPEND_MBIM_RECV",
-    [PWL_CID_OPEN_MBIM_RECV] = "OPEN_MBIM_RECV",
     [PWL_CID_SWITCH_TO_FASTBOOT] = "SWITCH_TO_FASTBOOT",
     [PWL_CID_CHECK_OEM_PRI_VERSION] = "CHECK_OEM_PRI_VERSION",
     [PWL_CID_GET_PREF_CARRIER] = "GET_PREF_CARRIER",
