@@ -517,13 +517,6 @@ void* msg_queue_thread_func() {
                 PWL_LOG_DEBUG("CID ATE: %s", message.response);
                 pthread_cond_signal(&g_cond);
                 break;
-            case PWL_CID_OPEN_MBIM_RECV:
-#if AT_OVER_MBIM_CONTROL_MSG
-                PWL_LOG_DEBUG("Mbim open result: %s", message.response);
-                update_progress_dialog(5, "Mbim opened!", NULL);
-                pthread_cond_signal(&g_cond);
-#endif
-                break;
             case PWL_CID_GET_ATI:
                 if (DEBUG && message.status == PWL_CID_STATUS_OK) PWL_LOG_DEBUG("CID ATI: %s", message.response);
                 pthread_cond_signal(&g_cond);
@@ -560,10 +553,7 @@ void* msg_queue_thread_func() {
                 if (strcmp(cid_status_name[message.status], "ERROR") == 0) {
                     PWL_LOG_ERR("Switch to fastboot cmd ERROR");
                     g_is_fastboot_cmd_error = TRUE;
-                } 
-#if AT_OVER_MBIM_CONTROL_MSG
-                send_message_queue(PWL_CID_SUSPEND_MBIM_RECV);
-#endif
+                }
                 break;
             case PWL_CID_CHECK_OEM_PRI_VERSION:
                 if (message.status == PWL_CID_STATUS_OK) {
@@ -635,9 +625,6 @@ void* msg_queue_thread_func() {
                     strcpy(g_pref_carrier, message.response);
                 }
                 pthread_cond_signal(&g_cond);
-                break;
-            case PWL_CID_SUSPEND_MBIM_RECV:
-                PWL_LOG_DEBUG("Suspend mbim: %s", message.response);
                 break;
             case PWL_CID_MADPT_RESTART:
                 pthread_cond_signal(&g_madpt_wait_cond);
@@ -1485,34 +1472,8 @@ int download_process( void *argu_ptr )
     sprintf( output_message, "\n%sModule boot up completed, Elapsed time: %02dm:%02ds \n", fdtl_data->g_prefix_string, elapsed_time/60, elapsed_time%60 );
     printf_fdtl_s( output_message );
 
-#if AT_OVER_MBIM_CONTROL_MSG
-    // Re-open mbim port
-    
-    int err = 0;
-    int at_result = -1;
-    struct timespec timeout;
 
-    send_message_queue(PWL_CID_OPEN_MBIM_RECV);
-
-    pthread_mutex_lock(&g_mutex);
-    clock_gettime(CLOCK_REALTIME, &timeout);
-    timeout.tv_sec += PWL_OPEN_MBIM_TIMEOUT_SEC;
-    err = 0;
-    at_result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
-    if (at_result == ETIMEDOUT || at_result != 0) {
-        err = 1;
-    }
-    pthread_mutex_unlock(&g_mutex);
-    if (err)
-    {
-        PWL_LOG_ERR("Time out to re-open mbim, fw update stop!");
-        return -1;
-    }
-
-    // delay 5 sec before send AT command
-    sleep(5);
-#endif
-
+    set_fw_update_status_value(JP_FCC_CONFIG_COUNT, 1);
     send_message_queue(PWL_CID_MADPT_RESTART);
     if (!cond_wait(&g_madpt_wait_mutex, &g_madpt_wait_cond, 120)) {
         PWL_LOG_ERR("timed out or error for madpt restart");
