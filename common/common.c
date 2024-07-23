@@ -21,6 +21,41 @@
 #include "common.h"
 #include "log.h"
 
+static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
+
+char *usb_devices[] = { "0CBD", "0CC2", "0CC1", "0CC4", "0CB5",
+                        "0CB6", "0CB7", "0CB8", "0CB2", "0CB3",
+                        "0CB4", "0CB9", "0CBA", "0CBB", "0CBC",
+                        "0CD9", "0CDA", "0CF4", "0CF3", "0CE8",
+                        "0CF7", "0CF9", "0CFA", "0CF5", "0CF6" };
+
+char *pcie_devices[] = { "0CF4", "0CF5", "0CF6", "0CDD", "0CF1",
+                         "0CDB" };
+
+gchar* usbid_info[] = {
+    "413c:8217",
+    "413c:8218",
+    "413c:8219",
+};
+#define USBID_LIST_COUNT        (sizeof(usbid_info) / sizeof(usbid_info[0]))
+
+gchar* pcieid_info[] = {
+    "14c0:4d75",
+    "14c0:0b5e",
+    "14c0:0b63",
+    "14c0:0b62",
+    "14c0:0b68",
+    "14C0:0B68",
+    "14c0:0b64",
+    "14c0:0b66",
+    "14c0:0b65",
+    "14c0:0b5f",
+};
+#define PCIEID_LIST_COUNT       (sizeof(pcieid_info) / sizeof(pcieid_info[0]))
+
+#define SUBSYS_ID_QUERY_CMD "udevadm info --query=all --path=/sys/bus/pci/devices/%s | grep PCI_SUBSYS_ID="
+#define SUBSYS "1028:5933"
+
 
 gboolean pwl_discard_old_messages(const gchar *path) {
     mqd_t mq;
@@ -111,17 +146,21 @@ void pwl_get_skuid(gchar *buff, gint buff_len) {
     }
 }
 
-gboolean pwl_module_usb_id_exist(gchar *usbid) {
+gboolean pwl_module_device_id_exist(pwl_device_type_t type, gchar *id) {
 
-    gchar command[] = "lsusb | grep ";
+    gchar *command = NULL;
+    if (type == PWL_DEVICE_TYPE_USB)
+        command = "lsusb | grep ";
+    else
+        command = "lspci -D -n | grep ";
 
-    gchar cmd[strlen(command) + strlen(usbid) + 1];
+    gchar cmd[strlen(command) + strlen(id) + 1];
     memset(cmd, 0, sizeof(cmd));
-    sprintf(cmd, "%s%s", command, usbid);
+    sprintf(cmd, "%s%s", command, id);
 
     FILE *fp = popen(cmd, "r");
     if (fp == NULL) {
-        PWL_LOG_ERR("usb id check cmd error!!!");
+        PWL_LOG_ERR("device id check cmd error!!!");
         return FALSE;
     }
 
@@ -131,10 +170,95 @@ gboolean pwl_module_usb_id_exist(gchar *usbid) {
 
     pclose(fp);
 
-    if (strlen(response) > 0)
-        return TRUE;
+    if (ret != NULL && strlen(response) > 0) {
+        if (type == PWL_DEVICE_TYPE_USB) {
+            return TRUE;
+        } else {
+            // check pcie subsys id
+            const char s[2] = " ";
+            char *domain;
+            domain = strtok(response, s);
+            if (!domain) return FALSE;
+
+            char query_cmd[strlen(SUBSYS_ID_QUERY_CMD) + 20];
+            memset(query_cmd, 0, sizeof(query_cmd));
+            sprintf(query_cmd, SUBSYS_ID_QUERY_CMD, domain);
+
+            fp = popen(query_cmd, "r");
+            if (fp == NULL) {
+                PWL_LOG_ERR("device subsys check cmd error!!!");
+                return FALSE;
+            }
+
+            char subsysid[100];
+            memset(subsysid, 0, sizeof(subsysid));
+            char *ret = fgets(subsysid, sizeof(subsysid), fp);
+            pclose(fp);
+
+            if (strlen(subsysid) > 0) {
+                char* subsys = strstr(subsysid, (char *)"PCI_SUBSYS_ID=");
+                id = subsys + strlen((char *)"PCI_SUBSYS_ID=");
+                if (strncmp(id, SUBSYS, strlen(SUBSYS)) == 0) {
+                    return TRUE;
+                }
+            }
+
+            return FALSE;
+        }
+    }
 
     return FALSE;
+}
+
+pwl_device_type_t pwl_get_device_type() {
+    gchar skuid[PWL_MAX_SKUID_SIZE];
+
+    if (g_device_type != PWL_DEVICE_TYPE_UNKNOWN)
+        return g_device_type;
+
+    pwl_get_skuid(skuid, PWL_MAX_SKUID_SIZE);
+    if (DEBUG) PWL_LOG_DEBUG("SKU Number: %s", skuid);
+
+    size_t usb_count = sizeof(usb_devices) / sizeof(usb_devices[0]);
+    for (int i = 0; i < usb_count; i++) {
+        if (strncmp(skuid, usb_devices[i], strlen(usb_devices[i])) == 0) {
+            for (gint j = 0; j < USBID_LIST_COUNT; j++) {
+                if (pwl_module_device_id_exist(PWL_DEVICE_TYPE_USB, usbid_info[j])) {
+                    PWL_LOG_INFO("Device type usb");
+                    g_device_type = PWL_DEVICE_TYPE_USB;
+                    return PWL_DEVICE_TYPE_USB;
+                }
+            }
+        }
+    }
+
+    size_t pcie_count = sizeof(pcie_devices) / sizeof(pcie_devices[0]);
+    for (int i = 0; i < pcie_count; i++) {
+        if (strncmp(skuid, pcie_devices[i], strlen(pcie_devices[i])) == 0) {
+            for (gint j = 0; j < PCIEID_LIST_COUNT; j++) {
+                if (pwl_module_device_id_exist(PWL_DEVICE_TYPE_PCIE, pcieid_info[j])) {
+                    PWL_LOG_INFO("Device type pcie");
+                    g_device_type = PWL_DEVICE_TYPE_PCIE;
+                    return PWL_DEVICE_TYPE_PCIE;
+                }
+            }
+        }
+    }
+
+    if (DEBUG) PWL_LOG_INFO("Device type unknown");
+    return PWL_DEVICE_TYPE_UNKNOWN;
+}
+
+pwl_device_type_t pwl_get_device_type_await() {
+    pwl_device_type_t type = PWL_DEVICE_TYPE_UNKNOWN;
+
+    for (gint i = 0; i < 30; i++) {
+        type = pwl_get_device_type();
+        if (type != PWL_DEVICE_TYPE_UNKNOWN)
+            return type;
+        g_usleep(1000*1000*2);
+    }
+    return PWL_DEVICE_TYPE_UNKNOWN;
 }
 
 gboolean cond_wait(pthread_mutex_t *mutex, pthread_cond_t *cond, gint wait_time) {
@@ -146,7 +270,7 @@ gboolean cond_wait(pthread_mutex_t *mutex, pthread_cond_t *cond, gint wait_time)
 
     int result = pthread_cond_timedwait(cond, mutex, &timeout);
     if (result == ETIMEDOUT || result != 0) {
-        PWL_LOG_ERR("timed out or error!!!");
+        if (DEBUG) PWL_LOG_ERR("timed out or error!!!");
         return FALSE;
     }
 
@@ -204,10 +328,16 @@ void print_message_info(msg_buffer_t* message) {
 
 gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size) {
 
-    FILE *fp = popen("find /dev/ -name cdc-wdm*", "r");
+    FILE *fp = NULL;
+    pwl_device_type_t type = pwl_get_device_type();
+    if (type == PWL_DEVICE_TYPE_USB) {
+        fp = popen("find /dev/ -name cdc-wdm*", "r");
+    } else if (type == PWL_DEVICE_TYPE_PCIE) {
+        fp = popen("find /dev/ -name wwan0mbim*", "r");
+    }
 
     if (fp == NULL) {
-        PWL_LOG_ERR("find port cmd error!!!");
+        if (DEBUG) PWL_LOG_ERR("find port cmd error!!!");
         return FALSE;
     }
 
@@ -301,7 +431,7 @@ gboolean pwl_set_command_available() {
 }
 
 int fw_update_status_init() {
-    FILE *fp;
+    FILE *fp = NULL;
 
     if (0 == access(FW_UPDATE_STATUS_RECORD, F_OK)) {
         PWL_LOG_DEBUG("File exist");
@@ -342,7 +472,7 @@ int fw_update_status_init() {
 }
 
 int set_fw_update_status_value(char *key, int value) {
-    FILE *fp;
+    FILE *fp = NULL;
     char line[STATUS_LINE_LENGTH];
     char new_value_line[STATUS_LINE_LENGTH];
     char *new_content = NULL;
@@ -387,7 +517,7 @@ int set_fw_update_status_value(char *key, int value) {
 }
 
 int get_fw_update_status_value(char *key, int *result) {
-    FILE *fp;
+    FILE *fp = NULL;
     char line[STATUS_LINE_LENGTH];
     char *temp_pos = NULL;
     char value[5];
@@ -416,6 +546,140 @@ int get_fw_update_status_value(char *key, int *result) {
     *result = atoi(value);
     fclose(fp);
     return 0;
+}
+
+int bootup_status_init() {
+    FILE *fp = NULL;
+
+    if (0 == access(BOOTUP_STATUS_RECORD, F_OK)) {
+        PWL_LOG_DEBUG("Bootup record file exist");
+        fp = fopen(BOOTUP_STATUS_RECORD, "r");
+
+        if (fp == NULL) {
+            PWL_LOG_ERR("Open bootup state record file error!");
+            return -1;
+        }
+        fclose(fp);
+    } else {
+        PWL_LOG_DEBUG("File not exist");
+        fp = fopen(BOOTUP_STATUS_RECORD, "w");
+
+        if (fp == NULL) {
+            PWL_LOG_ERR("Create bootup state record file error!");
+            return -1;
+        }
+        fprintf(fp, "Bootup_failure_count=0\n");
+        fclose(fp);
+    }
+    return 0;
+}
+
+int set_bootup_status_value(char *key, int value) {
+    FILE *fp = NULL;
+    char line[STATUS_LINE_LENGTH];
+    char new_value_line[STATUS_LINE_LENGTH];
+    char *new_content = NULL;
+
+    fp = fopen(BOOTUP_STATUS_RECORD, "r+");
+    int value_len, file_size, new_file_size;
+    value_len = count_int_length(value);
+    if (fp == NULL) {
+        PWL_LOG_ERR("Open bootup state record file error!");
+        return -1;
+    }
+
+    // Check size
+    fseek(fp, 0, SEEK_END);
+    file_size = ftell(fp);
+
+    new_file_size = file_size + value_len + 1;
+    new_content = malloc(new_file_size);
+    memset(new_content, 0, new_file_size);
+
+    fseek(fp, 0, SEEK_SET);
+    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
+        if (strstr(line, key)) {
+            sprintf(new_value_line, "%s=%d\n", key, value);
+            strcat(new_content, new_value_line);
+        } else {
+            strcat(new_content, line);
+        }
+    }
+    fclose(fp);
+    fp = fopen(BOOTUP_STATUS_RECORD, "w");
+
+    if (fp == NULL) {
+        PWL_LOG_ERR("Create bootup state record file error!\n");
+        return -1;
+    }
+    fwrite(new_content, sizeof(char), strlen(new_content), fp);
+    free(new_content);
+    fclose(fp);
+
+    return 0;
+}
+
+int get_bootup_status_value(char *key, int *result) {
+    FILE *fp = NULL;
+    char line[STATUS_LINE_LENGTH];
+    char *temp_pos = NULL;
+    char value[5];
+
+    memset(value, 0, sizeof(value));
+
+    fp = fopen(BOOTUP_STATUS_RECORD, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Open bootup state record file error!");
+        return -1;
+    }
+
+    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
+        if (strstr(line, key)) {
+            temp_pos = strchr(line, '=');
+            ++temp_pos;
+            strncpy(value, temp_pos, strlen(temp_pos));
+            if (NULL != strstr(value, "\r\n")) {
+                PWL_LOG_DEBUG("get result string has carriage return\n");
+                value[strlen(temp_pos) - 2] = '\0';
+            } else {
+                value[strlen(temp_pos) - 1] = '\0';
+            }
+        }
+    }
+    // PWL_LOG_DEBUG("value: %s\n", value);
+    *result = atoi(value);
+    fclose(fp);
+    return 0;
+}
+
+int read_config_from_file(char *file_name, char*key, int *result) {
+    FILE *fp = NULL;
+    char line[STATUS_LINE_LENGTH];
+    char *temp_pos = NULL;
+    char value[5];
+
+    fp = fopen(file_name, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Open file error!");
+        return RET_FAILED;
+    }
+    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
+        if (strstr(line, key)) {
+            temp_pos = strchr(line, '=');
+            ++temp_pos;
+            strncpy(value, temp_pos, strlen(temp_pos));
+            if (NULL != strstr(value, "\r\n")) {
+                PWL_LOG_DEBUG("get result string has carriage return\n");
+                value[strlen(temp_pos) - 2] = '\0';
+            } else {
+                value[strlen(temp_pos) - 1] = '\0';
+            }
+        }
+    }
+    // PWL_LOG_DEBUG("value: %s\n", value);
+    *result = atoi(value);
+    fclose(fp);
+    return RET_OK;
 }
 
 int count_int_length(unsigned x) {
