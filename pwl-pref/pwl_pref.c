@@ -57,6 +57,7 @@ static gchar g_manufacturer[PWL_MAX_MFR_SIZE] = {0};
 static gchar g_skuid[PWL_MAX_SKUID_SIZE] = {0};
 static gchar g_fwver[INFO_BUFFER_SIZE] = {0};
 
+static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
 
 static gboolean signal_get_fw_version_handler(pwlCore *object, const gchar *arg, gpointer userdata) {
     if (NULL != g_signal_callback.callback_get_fw_version) {
@@ -189,17 +190,22 @@ void send_message_queue(uint32_t cid) {
 void signal_callback_get_fw_version(const gchar* arg) {
     PWL_LOG_DEBUG("!!! signal_callback_get_fw_version !!!");
     g_check_sim_carrier_on_going = TRUE;
-    for (int i = 0; i < 3; i++) {
-        send_message_queue(PWL_CID_GET_FW_VER);
-        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
-            PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_FW_VER]);
+
+    if (g_device_type == PWL_DEVICE_TYPE_USB) {
+        for (int i = 0; i < 3; i++) {
+            send_message_queue(PWL_CID_GET_FW_VER);
+            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_FW_VER]);
+            }
+            if (g_main_fw_version != NULL && strlen(g_main_fw_version) > 0) {
+                break;
+            } else {
+                g_usleep(1000*300);
+                continue;
+            }
         }
-        if (g_main_fw_version != NULL && strlen(g_main_fw_version) > 0) {
-            break;
-        } else {
-            g_usleep(1000*300);
-            continue;
-        }
+    } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        // TODO read fw version
     }
 
     for (int i = 0; i < 3; i++) {
@@ -217,12 +223,14 @@ void signal_callback_get_fw_version(const gchar* arg) {
                     PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_CIMI]);
                 }
                 if (strlen(g_sim_carrier) > 0) {
-                    if (get_preferred_carrier() == 0) {
-                        // Compare sim carrier and preferred carrier
-                        PWL_LOG_DEBUG("Compare sim carrier: %s, pref carrier: %s", g_sim_carrier, g_pref_carrier);
-                        if (strncasecmp(g_sim_carrier, g_pref_carrier, strlen(g_sim_carrier)) != 0) {
-                            PWL_LOG_DEBUG("Set preferred carrier to: %s", g_sim_carrier);
-                            set_preferred_carrier(g_sim_carrier, 3);
+                    if (g_device_type == PWL_DEVICE_TYPE_USB) {
+                        if (get_preferred_carrier() == 0) {
+                            // Compare sim carrier and preferred carrier
+                            PWL_LOG_DEBUG("Compare sim carrier: %s, pref carrier: %s", g_sim_carrier, g_pref_carrier);
+                            if (strncasecmp(g_sim_carrier, g_pref_carrier, strlen(g_sim_carrier)) != 0) {
+                                PWL_LOG_DEBUG("Set preferred carrier to: %s", g_sim_carrier);
+                                set_preferred_carrier(g_sim_carrier, 3);
+                            }
                         }
                     }
                     g_check_sim_carrier_on_going = FALSE;
@@ -358,6 +366,10 @@ gint set_preferred_carrier(char *carrier, int retry_limit) {
 
 void signal_callback_sim_state_change(gint ready_state) {
     // PWL_LOG_DEBUG("!!! signal_callback_sim_state_change, arg: %d", arg);
+
+    if (g_device_type != PWL_DEVICE_TYPE_USB)
+        return;
+
     switch (ready_state) {
         case PWL_SIM_STATE_INITIALIZED:
             PWL_LOG_DEBUG("Sim insert");
@@ -652,6 +664,12 @@ void split_fw_versions(char *fw_version) {
 }
 
 gint main() {
+    g_device_type = pwl_get_device_type_await();
+    if (g_device_type == PWL_DEVICE_TYPE_UNKNOWN) {
+        PWL_LOG_INFO("Unsupported device.");
+        return 0;
+    }
+
     pwl_discard_old_messages(PWL_MQ_PATH_PREF);
 
     pwl_get_manufacturer(g_manufacturer, PWL_MAX_MFR_SIZE);
