@@ -99,3 +99,7 @@ To install services
 
 - version: 3.2.0
     - Modem AT control over MBIM
+
+- version: 4.0.0
+    - pcie device support
+    - pcie device FCC unlock & Module recovery
