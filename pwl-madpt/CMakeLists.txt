@@ -3,8 +3,6 @@ cmake_minimum_required(VERSION 3.10)
 INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/includes)
 INCLUDE_DIRECTORIES(/usr/include/gio-unix-2.0)
 
-add_compile_options(-DAT_OVER_MBIM_API)
-
 INCLUDE_DIRECTORIES(${PROJECT_BINARY_DIR}/ /usr/local/include/libmbim-glib /usr/include/libmbim-glib)
 
 link_directories(${PROJECT_BINARY_DIR}/)

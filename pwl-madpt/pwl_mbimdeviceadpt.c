@@ -21,7 +21,6 @@
 #include "common.h"
 #include "pwl_mbimdeviceadpt.h"
 
-#if defined(AT_OVER_MBIM_API)
 pthread_mutex_t g_device_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_device_cond = PTHREAD_COND_INITIALIZER;
 
@@ -32,7 +31,7 @@ static gboolean g_device_opened = FALSE;
 
 
 static void at_command_query_cb(MbimDevice *dev, GAsyncResult *res, gpointer user_data) {
-    MbimMessage *response;
+    g_autoptr(MbimMessage) response = NULL;
     g_autoptr(GError) error = NULL;
     guint32 command_resp_size;
     const guint8 *command_resp;
@@ -54,16 +53,13 @@ static void at_command_query_cb(MbimDevice *dev, GAsyncResult *res, gpointer use
         guint8 *error_resp = "QUERY ERROR";
         if (cb) cb(error_resp);
     }
-
-    if (response)
-        mbim_message_unref(response);
 }
 
 void pwl_mbimdeviceadpt_at_req(char *command, mbim_at_resp_callback cb) {
 
     if (DEBUG) PWL_LOG_DEBUG("cmd: %s", command);
 
-    MbimMessage *message;
+    g_autoptr(MbimMessage) message = NULL;
 
     size_t command_req_size = strlen(command) + strlen("\r\n") + 1;
     guint8 *command_req = (guint8 *) malloc(command_req_size);
@@ -74,7 +70,6 @@ void pwl_mbimdeviceadpt_at_req(char *command, mbim_at_resp_callback cb) {
               (const guint8 *)command_req, NULL);
     mbim_device_command(g_device, message, (PWL_CMD_TIMEOUT_SEC - 1), NULL,
                         (GAsyncReadyCallback)at_command_query_cb, (gpointer)cb);
-    mbim_message_unref(message);
 
     if (command_req) {
         free(command_req);
@@ -163,7 +158,7 @@ void pwl_mbimdeviceadpt_deinit() {
 
     device_close();
     if (!cond_wait(&g_device_mutex, &g_device_cond, PWL_CLOSE_MBIM_TIMEOUT_SEC)) {
-        PWL_LOG_ERR("timed out or error during mbim deinit");
+        if (DEBUG) PWL_LOG_ERR("timed out or error during mbim deinit");
     }
 
     if (g_cancellable)
@@ -187,4 +182,3 @@ gboolean pwl_mbimdeviceadpt_port_wait() {
     }
     return FALSE;
 }
-#endif /* AT_OVER_MBIM_API */

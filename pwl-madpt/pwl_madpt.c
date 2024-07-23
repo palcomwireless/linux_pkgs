@@ -69,10 +69,8 @@ static gulong g_ret_signal_handler[RET_SIGNAL_HANDLE_SIZE];
 //static signal_callback_t g_signal_callback;
 //static method_callback_t g_method_callback;
 
-#if defined(AT_OVER_MBIM_API)
 static void mbim_device_ready_cb();
 static void mbim_at_resp_cb(const gchar* response);
-#endif
 
 gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
     if (rsp == NULL) {
@@ -122,12 +120,10 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
 }
 
 pwl_cid_status_t at_cmd_request(gchar *command) {
-#if defined(AT_OVER_MBIM_API)
-    pwl_mbimdeviceadpt_at_req(command, mbim_at_resp_cb);
-    return PWL_CID_STATUS_OK;
-
-#else
-    if (g_at_intf == PWL_AT_CHANNEL || g_at_intf == PWL_AT_OVER_MBIM_CLI) {
+    if (g_at_intf == PWL_AT_OVER_MBIM_API) {
+        pwl_mbimdeviceadpt_at_req(command, mbim_at_resp_cb);
+        return PWL_CID_STATUS_OK;
+    } else if (g_at_intf == PWL_AT_CHANNEL || g_at_intf == PWL_AT_OVER_MBIM_CLI) {
         gchar *response = NULL;
         gboolean res = FALSE;
         if (g_at_intf == PWL_AT_OVER_MBIM_CLI) {
@@ -149,19 +145,17 @@ pwl_cid_status_t at_cmd_request(gchar *command) {
         return PWL_CID_STATUS_ERROR;
     }
     return PWL_CID_STATUS_ERROR;
-#endif
 }
 
 pwl_cid_status_t madpt_at_cmd_request(gchar *command) {
     pwl_cid_status_t status;
     status = at_cmd_request(command);
-#if defined(AT_OVER_MBIM_API)
-    mbim_error_check();
-#endif
+    if (g_at_intf == PWL_AT_OVER_MBIM_API) {
+        mbim_error_check();
+    }
     return status;
 }
 
-#if defined(AT_OVER_MBIM_API)
 static void mbim_device_ready_cb(gboolean opened) {
     if (opened) {
         //Send signal to pwl_pref to get fw version
@@ -190,7 +184,6 @@ static void mbim_at_resp_cb(const gchar* response) {
         pthread_cond_signal(&g_cond);
     }
 }
-#endif
 
 static void cb_owner_name_changed_notify(GObject *object, GParamSpec *pspec, gpointer userdata) {
     gchar *pname_owner = NULL;
@@ -387,9 +380,13 @@ static gpointer msg_queue_thread_func(gpointer data) {
             pthread_mutex_unlock(&g_mutex);
         }
 
-#if defined(AT_OVER_MBIM_API)
-        mbim_error_check();
-#endif
+        if (g_at_intf == PWL_AT_OVER_MBIM_API) {
+            if (mbim_err_cnt >= PWL_MBIM_ERR_MAX) {
+                pwl_mbimdeviceadpt_deinit();
+                pwl_mbimdeviceadpt_init(mbim_device_ready_cb);
+                mbim_err_cnt = 0;
+            }
+        }
 
         PWL_LOG_INFO("total error (%d)", mbim_err_cnt);
 
@@ -607,9 +604,9 @@ void jp_fcc_config() {
 }
 
 void clean_up() {
-#if defined(AT_OVER_MBIM_API)
-    pwl_mbimdeviceadpt_deinit();
-#endif
+    if (g_at_intf == PWL_AT_OVER_MBIM_API) {
+        pwl_mbimdeviceadpt_deinit();
+    }
 }
 
 void restart() {
@@ -629,14 +626,24 @@ void restart() {
 gint main() {
     PWL_LOG_INFO("start");
 
-    g_at_intf = PWL_AT_OVER_MBIM_API;
+    pwl_device_type_t type = pwl_get_device_type_await();
+    if (type == PWL_DEVICE_TYPE_UNKNOWN) {
+        PWL_LOG_INFO("Unsupported device.");
+        return EXIT_SUCCESS;
+    }
+
+    if (type == PWL_DEVICE_TYPE_USB) {
+        g_at_intf = PWL_AT_OVER_MBIM_API;
+    } else {
+        g_at_intf = PWL_AT_CHANNEL;
+    }
 
     pwl_discard_old_messages(PWL_MQ_PATH_MADPT);
 
-#if defined(AT_OVER_MBIM_API)
-    mbim_init(TRUE);
-    sleep(5);
-#endif
+    if (g_at_intf == PWL_AT_OVER_MBIM_API) {
+        mbim_init(TRUE);
+        sleep(5);
+    }
 
     GThread *msg_queue_thread = g_thread_new("msg_queue_thread", msg_queue_thread_func, NULL);
 
@@ -645,15 +652,14 @@ gint main() {
     while(!dbus_service_is_ready());
     PWL_LOG_DEBUG("DBus Service is ready");
 
+    if (g_at_intf != PWL_AT_OVER_MBIM_API) { // mbim api case need to wait for device ready first
+        //Send signal to pwl_pref to get fw version
+        pwl_core_call_madpt_ready_method_sync (gp_proxy, NULL, NULL);
 
-#if !defined(AT_OVER_MBIM_API) // mbim api case need to wait for device ready first
-    //Send signal to pwl_pref to get fw version
-    pwl_core_call_madpt_ready_method_sync (gp_proxy, NULL, NULL);
-
-    send_message_reply(PWL_CID_MADPT_RESTART, PWL_MQ_ID_MADPT, PWL_MQ_ID_FWUPDATE, PWL_CID_STATUS_OK, "Madpt started");
-#else
-    GThread *jp_fcc_thread = g_thread_new("jp_fcc_thread", jp_fcc_thread_func, NULL);
-#endif
+        send_message_reply(PWL_CID_MADPT_RESTART, PWL_MQ_ID_MADPT, PWL_MQ_ID_FWUPDATE, PWL_CID_STATUS_OK, "Madpt started");
+    } else {
+        GThread *jp_fcc_thread = g_thread_new("jp_fcc_thread", jp_fcc_thread_func, NULL);
+    }
 
     if (gp_loop != NULL)
         g_main_loop_run(gp_loop);

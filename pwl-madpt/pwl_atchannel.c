@@ -145,7 +145,14 @@ exit:
 gboolean pwl_atchannel_find_at_port() {
     PWL_LOG_INFO("looking for port..");
     gboolean found = FALSE;
-    FILE *fp = popen("find /dev/ -name ttyUSB*", "r");
+    FILE *fp = NULL;
+
+    pwl_device_type_t type = pwl_get_device_type();
+    if (type == PWL_DEVICE_TYPE_USB) {
+        fp = popen("find /dev/ -name ttyUSB*", "r");
+    } else if (type == PWL_DEVICE_TYPE_PCIE) {
+        fp = popen("find /dev/ -name wwan0at*", "r");
+    }
 
     if (fp == NULL) {
         PWL_LOG_ERR("find at port cmd error!!!");
@@ -162,6 +169,9 @@ gboolean pwl_atchannel_find_at_port() {
         if (!result) {
             sleep(3);
             PWL_LOG_INFO("retry 2nd time for %s", port);
+            if (response != NULL) {
+                free(response);
+            }
             send_at_cmd(port, "AT", &response);
         }
 
@@ -196,7 +206,13 @@ gboolean pwl_atchannel_at_req(const gchar *command, gchar **response) {
 gboolean pwl_atchannel_at_port_wait() {
     for (int i = 0; i < 10; i++) {
 
-        FILE *fp = popen("find /dev/ -name ttyUSB*", "r");
+        FILE *fp = NULL;
+        pwl_device_type_t type = pwl_get_device_type();
+        if (type == PWL_DEVICE_TYPE_USB) {
+            fp = popen("find /dev/ -name ttyUSB*", "r");
+        } else if (type == PWL_DEVICE_TYPE_PCIE) {
+            fp = popen("find /dev/ -name wwan0at*", "r");
+        }
 
         if (fp == NULL) {
             PWL_LOG_ERR("find at port cmd error!!!");

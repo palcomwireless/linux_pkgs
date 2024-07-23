@@ -39,8 +39,6 @@
 gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size);
 void jp_fcc_config();
 void restart();
-#if defined(AT_OVER_MBIM_API)
 void mbim_error_check();
-#endif
 
 #endif
