@@ -21,6 +21,29 @@
 #include "CoreGdbusGenerated.h"
 #include "libmbim-glib.h"
 
+// PCI device hw reset
+#define BOOTUP_CONFIG_FILE          "/opt/pwl/bootup_config"
+#define CONFIG_MAX_BOOTUP_FAILURE   "MAX_BOOTUP_FAILURE"
+#define DEVICE_MODE_NAME            "t7xx_mode"
+#define DEVICE_REMOVE_NAME          "remove"
+#define DEVICE_RESCAN_NAME          "rescan"
+
+#define MODE_DEVICE_CAP             1
+#define MODE_INTEL_REBOOT           2
+#define MODE_INTEL_REBOOT_v2        3
+
+#define DEVICE_HW_RESET             0
+#define DEVICE_HW_RESCAN            1
+#define DEVICE_CHECK_PERIOD         60
+#define SHELL_CMD_RSP_LENGTH        128
+#define DEVICE_MODE_LENGTH          16
+
+#define DEVICE_REMOVE_DELAY         5   //Delay before remove device
+#define DEVICE_RESCAN_DELAY         5   //Delay before rescan device
+#define MAX_BOOTUP_FAILURE          3
+#define MAX_RESCAN_FAILURE          3
+#define TIMEOUT_SEC                 10
+
 typedef struct {
     char *skuid;
     int gpio;
@@ -54,8 +77,28 @@ s_skuid_to_gpio g_skuid_to_gpio[] = {
         {"0CF6", 595}
 };
 
+typedef void (*mbim_device_ready_callback)(void);
+
+enum CHECK_MODULE_RETURNS {
+    CHECK_PASS,
+    CHECK_FAILURE,
+    CHECK_IN_ABNORMAL_STATE
+};
+
 int gpio_init(void);
 int set_gpio_status(int enable, int gpio);
 static gboolean hw_reset();
+// PCI device monitor and hw reset
+gboolean pci_mbim_device_init(mbim_device_ready_callback cb);
+gboolean find_mbim_port(gchar*, guint32);
+gboolean find_abnormal_port(gchar*, guint32);
+int do_shell_cmd(char *cmd, char *response);
+int get_full_path(char *full_path);
+int get_device_node_path(char *full_path, char *device_node_path);
+int get_device_mode(char *device_node_path, char *mode);
+int set_device_mode(char *device_node_path, char *node, char *value);
+int do_pci_hw_reset(int reset_mode);
+int check_module_info_v2();
+static void pci_mbim_device_ready_cb();
 
 #endif
