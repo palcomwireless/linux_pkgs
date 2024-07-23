@@ -36,6 +36,7 @@
 
 #define STATUS_LINE_LENGTH              128
 #define FW_UPDATE_STATUS_RECORD         "/opt/pwl/firmware/fw_update_status"
+#define BOOTUP_STATUS_RECORD            "/opt/pwl/bootup_status"
 #define FIND_FASTBOOT_RETRY_COUNT       "Find_fastboot_retry_count"
 #define WAIT_MODEM_PORT_RETRY_COUNT     "Wait_modem_port_retry_count"
 #define WAIT_AT_PORT_RETRY_COUNT        "Wait_at_port_retry_count"
@@ -43,6 +44,7 @@
 #define DO_HW_RESET_COUNT               "Do_hw_reset_count"
 #define NEED_RETRY_FW_UPDATE            "Need_retry_fw_update"
 #define JP_FCC_CONFIG_COUNT             "jp_fcc_config_count"
+#define BOOTUP_FAILURE_COUNT            "Bootup_failure_count"
 
 #define DEVICE_PACKAGE_VERSION_LENGTH   15
 #define FW_UPDATE_RETRY_TH              3
@@ -192,12 +194,26 @@ typedef enum {
     PWL_SIM_STATE_INITIALIZED
 } pwl_sim_state_t;
 
+typedef enum {
+    PWL_DEVICE_TYPE_UNKNOWN,
+    PWL_DEVICE_TYPE_USB,
+    PWL_DEVICE_TYPE_PCIE
+} pwl_device_type_t;
+
+enum RETURNS {
+    RET_FAILED,
+    RET_OK
+};
+
 gboolean pwl_discard_old_messages(const gchar *path);
 gboolean get_host_info(const gchar *cmd, gchar *buff, gint buff_len);
 gboolean filter_host_info_header(const gchar *header, gchar *info, gchar *buff, gint buff_len);
 void pwl_get_manufacturer(gchar *buff, gint buff_len);
 void pwl_get_skuid(gchar *buff, gint buff_len);
 gboolean pwl_module_usb_id_exist(gchar *usbid);
+gboolean pwl_module_pcie_id_exist(gchar *pcieid);
+pwl_device_type_t pwl_get_device_type();
+pwl_device_type_t pwl_get_device_type_await();
 gboolean cond_wait(pthread_mutex_t *mutex, pthread_cond_t *cond, gint wait_time);
 void send_message_reply(uint32_t cid, uint32_t sender_id, uint32_t dest_id, pwl_cid_status_t status, char *msg);
 void print_message_info(msg_buffer_t* message);
@@ -207,6 +223,10 @@ gboolean pwl_set_command_available();
 int fw_update_status_init();
 int set_fw_update_status_value(char *key, int value);
 int get_fw_update_status_value(char *key, int *result);
+int bootup_status_init();
+int set_bootup_status_value(char *key, int value);
+int get_bootup_status_value(char *key, int *result);
 int count_int_length(unsigned x);
+int read_config_from_file(char *file_name, char*key, int *value);
 
 #endif
