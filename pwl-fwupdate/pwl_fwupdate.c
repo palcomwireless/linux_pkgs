@@ -70,8 +70,8 @@ static pwlCore *gp_proxy = NULL;
 static gulong g_ret_signal_handler[RET_SIGNAL_HANDLE_SIZE];
 
 char g_image_file_fw_list[MAX_DOWNLOAD_FW_IMAGES][MAX_PATH];
-char g_image_file_carrier_list[MAX_DOWNLOAD_FILES][MAX_PATH];
-char g_image_file_oem_list[MAX_DOWNLOAD_FILES][MAX_PATH];
+char g_image_file_carrier_list[MAX_DOWNLOAD_PRI_IMAGES][MAX_PATH];
+char g_image_file_oem_list[MAX_DOWNLOAD_OEM_IMAGES][MAX_PATH];
 char g_image_file_list[MAX_DOWNLOAD_FILES][MAX_PATH];
 char g_image_pref_version[MAX_PATH];
 char g_diag_modem_port[SUPPORT_MAX_DEVICE][MAX_PATH];
@@ -150,7 +150,7 @@ pthread_mutex_t g_madpt_wait_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_madpt_wait_cond = PTHREAD_COND_INITIALIZER;
 
 // Process percent
-FILE *g_progress_fp;
+FILE *g_progress_fp = NULL;
 int g_progress_percent = 0;
 char g_progress_percent_text[32];
 char g_progress_status[200];
@@ -197,7 +197,7 @@ const char* strstricase(const char* str, const char* subStr)
 
 char* get_test_sku_id()
 {
-    FILE *fp;
+    FILE *fp = NULL;
     char line[16];
     char test_sku_id[16];
     if (0 == access("/opt/pwl/test_sku_id", F_OK)) {
@@ -272,21 +272,21 @@ char* get_oem_sku_id(char *ssid)
     else if (strcmp(ssid, "0CDA") == 0)
         return "4131001";
     else if (strcmp(ssid, "0CF4") == 0)
-        return "4131001";
+        return "4131007";
     else if (strcmp(ssid, "0CF3") == 0)
-        return "4131001";
+        return "4131006";
     else if (strcmp(ssid, "0CE8") == 0)
-        return "4131001";
+        return "4131009";
     else if (strcmp(ssid, "0CF7") == 0)
-        return "4131001";
+        return "4131010";
     else if (strcmp(ssid, "0CF9") == 0)
-        return "4131001";
+        return "4131009";
     else if (strcmp(ssid, "0CFA") == 0)
-        return "4131001";
+        return "4131010";
     else if (strcmp(ssid, "0CF5") == 0)
-        return "4131001";
+        return "4131008";
     else if (strcmp(ssid, "0CF6") == 0)
-        return "4131001";
+        return "4131008";
     else
         return "4131001";
 }
@@ -359,7 +359,7 @@ void update_progress_dialog(int percent_add, char *message, char *additional_mes
 
 int check_fastboot_device()
 {
-    FILE *fp;
+    FILE *fp = NULL;
     char output[1024];
 
     memset( output, 0, 1024 );
@@ -411,7 +411,7 @@ bool check_fastboot()
 
 void stop_modem_mgr()
 {
-    FILE *fp;
+    FILE *fp = NULL;
     char output[1024];
     char *pos, *result;
     int modem_manager_status = 0;
@@ -659,7 +659,7 @@ void* monitor_retry_func() {
 
 int check_modem_download_port( char *modem_usb_port )
 {
-    FILE *fp;
+    FILE *fp = NULL;
     char output[1024], input[128];
     
     sprintf( input, "ls %s 2>&1", modem_usb_port );
@@ -691,7 +691,7 @@ int check_modem_download_port( char *modem_usb_port )
 #if 0
 int check_fastboot_download_port()
 {
-    FILE *fp;
+    FILE *fp = NULL;
     char output[1024];
     char *pos;
     
@@ -786,7 +786,7 @@ int fastboot_send_command_v3( fdtl_data_t *fdtl_data, int exe_case, const char *
             default:
                 break;
         }
-        FILE *fp;
+        FILE *fp = NULL;
         fp = popen(command, "r");
         if (fp == 0)
         {
@@ -1080,7 +1080,7 @@ int decode_key( char *image_file_name )
 {
   unsigned char read_buf[ 256 ];
   int data_temp[ 256 ], i, size;
-  FILE *image_fp;
+  FILE *image_fp = NULL;
 
   size = 0;
 
@@ -1150,9 +1150,9 @@ int get_time_info( char print_time )
 void close_progress_msg_box() {
     if (g_progress_fp != NULL) {
         g_progress_percent = 98;
-        update_progress_dialog(1, NULL, "#Modem firmware upgrade failed!\\n\\n\n");
+        update_progress_dialog(1, NULL, "#Modem firmware update failed!\\n\\n\n");
         g_usleep(1000*1000*3);
-        update_progress_dialog(1, NULL, "#Modem firmware upgrade failed!\\n\\n\n");
+        update_progress_dialog(1, NULL, "#Modem firmware update failed!\\n\\n\n");
         pclose(g_progress_fp);
         g_progress_fp = NULL;
     }
@@ -1318,7 +1318,7 @@ int download_process( void *argu_ptr )
         free(recv_buffer);
         free(send_buffer);
 
-        update_progress_dialog(5, "Exit download process.", "#failed to enter download mode, exit from upgrade\\n\\n\n");
+        update_progress_dialog(5, "Exit download process.", "#failed to enter download mode, exit from update\\n\\n\n");
         sprintf(output_message, "%sExit download process.\n\n", fdtl_data->g_prefix_string );
         printf_fdtl_s( output_message );
 
@@ -1518,9 +1518,9 @@ int download_process( void *argu_ptr )
     fflush(stdout);
 
     g_progress_percent = 98;
-    update_progress_dialog(1, "Exit download process.", "#The Modem upgrade Success!\\n\\n\n");
+    update_progress_dialog(1, "Exit download process.", "#The Modem update Success!\\n\\n\n");
     g_usleep(1000*1000*3);
-    update_progress_dialog(1, "Exit download process.", "#The Modem upgrade Success!\\n\\n\n");
+    update_progress_dialog(1, "Exit download process.", "#The Modem update Success!\\n\\n\n");
     pclose(g_progress_fp);
     g_progress_fp = NULL;
     fdtl_data->download_process_state = DOWNLOAD_COMPLETED;
@@ -1655,7 +1655,7 @@ gint get_sim_carrier()
 
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
         if (GET_TEST_SIM_CARRIER) {
-            FILE *fp;
+            FILE *fp = NULL;
             char line[16];
             if (0 == access("/opt/pwl/test_carrier", F_OK)) {
                 fp = fopen("/opt/pwl/test_carrier", "r");
@@ -1986,7 +1986,7 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
 
     // carrie pri
     int prefered_index = 0;
-    for (int m=0; m < MAX_DOWNLOAD_FILES; m++)
+    for (int m=0; m < MAX_DOWNLOAD_PRI_IMAGES; m++)
     {
         if (strstr(g_image_file_carrier_list[m], ".cfw"))
         {
@@ -2007,7 +2007,7 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
     // g_image_file_count++;
     // oem pri
     g_oem_sku_id = get_oem_sku_id(g_skuid);
-    for (int m=0; m<MAX_DOWNLOAD_FILES; m++)
+    for (int m=0; m<MAX_DOWNLOAD_OEM_IMAGES; m++)
     {
         if (strstr(g_image_file_oem_list[m], g_oem_sku_id))
         {   
@@ -2138,19 +2138,20 @@ gint prepare_update_images() {
     char *image_full_file_name;
     int image_full_name_len;
     char temp[MAX_PATH];
-    char temp_fw_image_file_list[MAX_DOWNLOAD_FILES][MAX_PATH];
+    char temp_fw_image_file_list[MAX_DOWNLOAD_FW_IMAGES][MAX_PATH];
 
     // Reset image file list
     memset(g_image_file_fw_list, 0, sizeof(g_image_file_fw_list));
     memset(g_image_file_carrier_list, 0, sizeof(g_image_file_carrier_list));
     memset(g_image_file_oem_list, 0, sizeof(g_image_file_oem_list));
     memset(g_image_file_list, 0, sizeof(g_image_file_list));
+    memset(temp_fw_image_file_list, 0, sizeof(temp_fw_image_file_list));
 
     if (d) {
         while ((dir = readdir(d)) != NULL) {
             if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw")) {
-                if (img_count >= MAX_DOWNLOAD_FILES) {
-                    PWL_LOG_ERR("The max download image files is 10, please check!");
+                if (img_count >= MAX_DOWNLOAD_FW_IMAGES) {
+                    PWL_LOG_ERR("The max download fw image files is %d, please check!", MAX_DOWNLOAD_FW_IMAGES);
                     return -1;
                 }
                 image_full_name_len = strlen(IMAGE_FW_FOLDER_PATH) + strlen(dir->d_name) + 1;
@@ -2178,7 +2179,7 @@ gint prepare_update_images() {
         if (img_count <= MAX_DOWNLOAD_FW_IMAGES)
             g_fw_image_file_count = img_count;
         else
-            g_fw_image_file_count = 3;
+            g_fw_image_file_count = MAX_DOWNLOAD_FW_IMAGES;
 
         // Sort fw image
         for (int i=2; i <= img_count; i++) {
@@ -2212,8 +2213,8 @@ gint prepare_update_images() {
     if (d) {
         while ((dir = readdir(d)) != NULL) {
             if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw")) {
-                if (img_count >= MAX_DOWNLOAD_FILES) {
-                    PWL_LOG_ERR("The max download image files is 10, please check!");
+                if (img_count >= MAX_DOWNLOAD_PRI_IMAGES) {
+                    PWL_LOG_ERR("The max download carrier image files is %d, please check!", MAX_DOWNLOAD_PRI_IMAGES);
                     return -1;
                 }
                 image_full_name_len = strlen(IMAGE_CARRIER_FOLDER_PATH) + strlen(dir->d_name) + 1;
@@ -2249,8 +2250,8 @@ gint prepare_update_images() {
     if (d) {
         while ((dir = readdir(d)) != NULL) {
             if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw")) {
-                if (img_count >= 10) {
-                    PWL_LOG_ERR("The max download image files is 10, please check!");
+                if (img_count >= MAX_DOWNLOAD_OEM_IMAGES) {
+                    PWL_LOG_ERR("The max download oem image files is %d, please check!", MAX_DOWNLOAD_OEM_IMAGES);
                     return -1;
                 }
                 image_full_name_len = strlen(IMAGE_OEM_FOLDER_PATH) + strlen(dir->d_name) + 1;
@@ -2355,7 +2356,7 @@ int start_update_process(gboolean is_startup)
     strcpy(g_progress_status, "<span font='13'>Downloading ...\\n\\n</span><span foreground='red' font='16'>Do not shut down or restart</span>");
     sprintf(g_progress_command,
             "%szenity --progress --text=\"%s\" --percentage=%d --auto-close --no-cancel --width=600 --title=\"%s\"",
-            set_env_variable, g_progress_status, 1, "Modem Upgrade");
+            set_env_variable, g_progress_status, 1, "Modem Update");
 
     if (g_progress_fp != NULL) {
         pclose(g_progress_fp);
@@ -2443,7 +2444,7 @@ int start_update_process(gboolean is_startup)
     } else {
         PWL_LOG_INFO("Update images don't include any FW image. Continue to compare oem pri version");
 
-        for (int m = 0; m < MAX_DOWNLOAD_FILES; m++) {
+        for (int m = 0; m < MAX_DOWNLOAD_OEM_IMAGES; m++) {
             if (strstr(g_image_file_oem_list[m], g_oem_pri_ver)) {
                 PWL_LOG_INFO("oem match %s", g_image_file_oem_list[m]);
                 up_to_date = TRUE;
@@ -2618,6 +2619,17 @@ void registerSignalCallback(signal_callback_t *callback) {
 gint main( int Argc, char **Argv )
 {
     PWL_LOG_INFO("start");
+
+    pwl_device_type_t type = pwl_get_device_type_await();
+    if (type == PWL_DEVICE_TYPE_UNKNOWN) {
+        PWL_LOG_INFO("Unsupported device.");
+        return 0;
+    }
+
+    if (type == PWL_DEVICE_TYPE_PCIE) {
+        PWL_LOG_INFO("Unsupported fw upgrade device.");
+        return 0;
+    }
 
     pwl_discard_old_messages(PWL_MQ_PATH_FWUPDATE);
 

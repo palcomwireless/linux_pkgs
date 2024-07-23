@@ -31,7 +31,7 @@ extern const char *gp_log_output_file;
 
 void output_message_to_file( char *msg_buf )
 {
-     FILE *Fp;
+     FILE *Fp = NULL;
 
      Fp = fopen( gp_log_output_file, "a");
      if( Fp )
