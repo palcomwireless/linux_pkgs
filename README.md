@@ -41,6 +41,7 @@ And FCC unlock service is licensed under BSD-3-Clause.
 - sudo apt install pkg-config
 - sudo apt install libglib2.0-dev
 - sudo apt install libmbim-glib-dev
+- sudo apt install libxml2-dev
 - sudo apt install openssl
 
 ## 2. Build
