@@ -36,6 +36,7 @@
 
 #define STATUS_LINE_LENGTH              128
 #define FW_UPDATE_STATUS_RECORD         "/opt/pwl/firmware/fw_update_status"
+// #define HAS_BEEN_FW_UPDATE_FLAG         "/opt/pwl/has_been_fw_update"
 #define BOOTUP_STATUS_RECORD            "/opt/pwl/bootup_status"
 #define FIND_FASTBOOT_RETRY_COUNT       "Find_fastboot_retry_count"
 #define WAIT_MODEM_PORT_RETRY_COUNT     "Wait_modem_port_retry_count"
@@ -47,12 +48,14 @@
 #define BOOTUP_FAILURE_COUNT            "Bootup_failure_count"
 
 #define DEVICE_PACKAGE_VERSION_LENGTH   15
-#define FW_UPDATE_RETRY_TH              3
+#define FW_UPDATE_RETRY_TH              1
 #define FIND_FASTBOOT_RETRY_TH          10
 #define WAIT_MODEM_PORT_RETRY_TH        10
 #define WAIT_AT_PORT_RETRY_TH           10
 #define HW_RESET_RETRY_TH               5
 #define JP_FCC_CONFIG_RETRY_TH          3
+#define MAX_BOOTUP_FAILURE              1
+#define MAX_RESCAN_FAILURE              3
 
 #define PWL_MQ_MAX_MSG                  10
 #define PWL_MQ_MAX_CONTENT_LEN          30
@@ -74,6 +77,17 @@
 #define PWL_UNKNOWN_SIM_CARRIER         "UNKNOWN"
 #define PWL_FW_UPDATE_RETRY_LIMIT       3
 #define PWL_OEM_PRI_RESET_RETRY         3
+
+// For pcie device update
+#define UPDATE_FW_FLZ_FILE              "/opt/pwl/firmware/FwPackage.flz"
+#define UPDATE_DEV_FLZ_FILE             "/opt/pwl/firmware/DevPackage.flz"
+#define UPDATE_FW_FOLDER_FILE           "/opt/pwl/firmware/FwPackage"
+#define UPDATE_DEV_FOLDER_FILE          "/opt/pwl/firmware/DevPackage"
+#define MAX_FW_PACKAGE_PATH_LEN         128
+#define TYPE_FLASH_FLZ                  0
+#define TYPE_FLASH_FOLDER               1
+#define PCIE_UPDATE_BASE_FLZ            0
+#define PCIE_UPDATE_BASE_FLASH_FOLDER   1
 
 #define PWL_MQ_PATH(x) \
     ((x == PWL_MQ_ID_CORE)        ? PWL_MQ_PATH_CORE : \
@@ -98,6 +112,9 @@ typedef enum {
     PWL_CID_GET_OEM_VER,
     PWL_CID_UPDATE_FW_VER,
     PWL_CID_GET_SIM_CARRIER,
+    PWL_CID_GET_MD_VER,
+    PWL_CID_GET_OP_VER,
+    PWL_CID_GET_DPV_VER,
     PLW_CID_MAX_PREF,
     /* request to madpt */
     PWL_CID_GET_CIMI,
@@ -117,6 +134,10 @@ typedef enum {
     PWL_CID_GET_JP_FCC_AUTO_REBOOT,
     PWL_CID_ENABLE_JP_FCC_AUTO_REBOOT,
     PWL_CID_GET_OEM_PRI_RESET,
+    PWL_CID_GET_PCIE_DEVICE_VERSION,
+    PWL_CID_GET_PCIE_OP_VERSION,
+    PWL_CID_GET_PCIE_OEM_VERSION,
+    PWL_CID_GET_PCIE_DPV_VERSION,
     PWL_CID_MADPT_RESTART,
     PLW_CID_MAX_MADPT,
     PWL_CID_MAX
@@ -131,6 +152,9 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_OEM_VER] = "GET_OEM_VER",
     [PWL_CID_UPDATE_FW_VER] = "UPDATE_FW_VER",
     [PWL_CID_GET_SIM_CARRIER] = "GET_SIM_CARRIER",
+    [PWL_CID_GET_MD_VER] = "GET_MD_VER",
+    [PWL_CID_GET_OP_VER] = "GET_OP_VER",
+    [PWL_CID_GET_DPV_VER] = "GET_DPV_VER",
     [PWL_CID_GET_CIMI] = "GET_CIMI",
     [PWL_CID_GET_ATE] = "GET_ATE",
     [PWL_CID_GET_ATI] = "GET_ATI",
@@ -148,6 +172,10 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_JP_FCC_AUTO_REBOOT] = "GET_JP_FCC_AUTO_REBOOT",
     [PWL_CID_ENABLE_JP_FCC_AUTO_REBOOT] = "ENABLE_JP_FCC_AUTO_REBOOT",
     [PWL_CID_GET_OEM_PRI_RESET] = "GET_OEM_PRI_RESET",
+    [PWL_CID_GET_PCIE_DEVICE_VERSION] = "GET_PCIE_DEVICE_VERSION",
+    [PWL_CID_GET_PCIE_OP_VERSION] = "GET_PCIE_OP_VERSION",
+    [PWL_CID_GET_PCIE_OEM_VERSION] = "GET_PCIE_OEM_VERSION",
+    [PWL_CID_GET_PCIE_DPV_VERSION] = "GET_PCIE_DPV_VERSION",
     [PWL_CID_MADPT_RESTART] = "MADPT_RESTART",
 };
 
@@ -201,8 +229,8 @@ typedef enum {
 } pwl_device_type_t;
 
 enum RETURNS {
-    RET_FAILED,
-    RET_OK
+    RET_FAILED = -1,
+    RET_OK = 0
 };
 
 gboolean pwl_discard_old_messages(const gchar *path);
@@ -228,5 +256,7 @@ int set_bootup_status_value(char *key, int value);
 int get_bootup_status_value(char *key, int *result);
 int count_int_length(unsigned x);
 int read_config_from_file(char *file_name, char*key, int *value);
+int get_fwupdate_subsysid(char *subsysid);
+int remove_folder(char *path);
 
 #endif
