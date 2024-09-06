@@ -50,7 +50,11 @@ gchar* at_cmd_map[] = {
     "at*mgetoempriinfo=1",
     "at*bjpfccautoreboot?",
     "at*bjpfccautoreboot=1",
-    "at*boemprireset?"
+    "at*boemprireset?",
+    "at+productinfo=1",
+    "at*copid?",
+    "at*coemid?",
+    "at*cdpvid?"
 };
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -81,6 +85,7 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
 
     gchar* head = strstr(rsp, "\n");
     gchar* start = NULL;
+    gchar pcie_buffer[PWL_MQ_MAX_RESP] = {0};
     if (head != NULL) {
         start = head + 1;
         // check if start with more '\n'
@@ -100,6 +105,27 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
     }
 
     if (head == NULL || start == NULL || end == NULL) {
+        if (head == NULL)
+            PWL_LOG_ERR("[Notice] head == NULL");
+        else if (start == NULL)
+            PWL_LOG_ERR("[Notice] start == NULL");
+        else if (end == NULL) {
+            PWL_LOG_ERR("[Notice] end == NULL");
+
+            // Check if rsp contain contain keywords
+            if (strstr(rsp, "RMM-") ||
+                strstr(rsp, "OP.") ||
+                strstr(rsp, "OEM.") ||
+                strstr(rsp, "DPV")) {
+                strcpy(pcie_buffer, start);
+                pcie_buffer[strcspn(pcie_buffer, "\n")] = 0;
+                memset(buff_ptr, 0, strlen(pcie_buffer));
+                strncpy(buff_ptr, pcie_buffer, strlen(pcie_buffer));
+                return FALSE;
+            } else {
+                PWL_LOG_ERR("[Notice] rsp not include version keywords!!");
+            }
+        }
         PWL_LOG_ERR("Error parsing response");
         return FALSE;
     }
@@ -133,9 +159,11 @@ pwl_cid_status_t at_cmd_request(gchar *command) {
         }
         if (res) {
             if (!at_resp_parsing(response, g_response, PWL_MQ_MAX_RESP)) {
+                if (response) free(response);
                 return PWL_CID_STATUS_ERROR;
             }
         } else {
+            if (response) free(response);
             return PWL_CID_STATUS_ERROR;
         }
         if (response) {
@@ -402,6 +430,9 @@ static gpointer msg_queue_thread_func(gpointer data) {
             case PWL_CID_GET_FW_VER:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
+            case PWL_CID_GET_PCIE_DEVICE_VERSION:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
             case PWL_CID_SWITCH_TO_FASTBOOT:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, "Switch to fastboot cmd done");
                 break;
@@ -424,6 +455,15 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
             case PWL_CID_GET_CIMI:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_GET_PCIE_OP_VERSION:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_GET_PCIE_OEM_VERSION:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_GET_PCIE_DPV_VERSION:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
             default:
