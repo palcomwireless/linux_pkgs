@@ -25,6 +25,8 @@
 #define PWL_PREF_GET_SIM_INFO_DELAY 5
 #define PWL_PREF_SET_CARRIER_RETRY_LIMIT 3
 #define MAX_PATH  260
+#define MAX_PCIE_VERSION_LENGTH         512
+#define MAX_PCIE_AP_VERSION_LENGTH      10
 
 typedef void (*signal_get_fw_version_callback)(const gchar*);
 typedef void (*signal_get_sub_state_change_callback)(gint arg_status);
@@ -38,4 +40,5 @@ void split_fw_versions(char *fw_version);
 gint get_sim_carrier_info(int retry_delay, int retry_limit);
 gint get_preferred_carrier();
 gint set_preferred_carrier(char *carrier, int retry_limit);
+void split_pcie_device_versions(char *sw_version);
 #endif

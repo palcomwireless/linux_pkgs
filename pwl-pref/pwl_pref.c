@@ -40,6 +40,11 @@ static char *g_main_fw_version;
 static char *g_ap_version;
 static char *g_carrier_version;
 static char *g_oem_version;
+// For pcie device
+static char *g_modem_version;
+static char *g_op_version;
+static char *g_oem_version;
+static char *g_dpv_version;
 
 //SIM info
 static int g_mnc_len;
@@ -205,7 +210,59 @@ void signal_callback_get_fw_version(const gchar* arg) {
             }
         }
     } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
-        // TODO read fw version
+        // Using ati command to get ap version
+        // Get AP and MD version
+        for (int i = 0; i < 3; i++) {
+            send_message_queue(PWL_CID_GET_PCIE_DEVICE_VERSION);
+            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_FW_VER]);
+            }
+            if (g_ap_version != NULL && strlen(g_ap_version) > 0) {
+                break;
+            } else {
+                g_usleep(1000*300);
+                continue;
+            }
+        }
+        // Get OP version
+        for (int i = 0; i < 3; i++) {
+            send_message_queue(PWL_CID_GET_PCIE_OP_VERSION);
+            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_PCIE_OP_VERSION]);
+            }
+            if (g_op_version != NULL && strlen(g_op_version) > 0) {
+                break;
+            } else {
+                g_usleep(1000*500);
+                continue;
+            }
+        }
+        // Get OEM version
+        for (int i = 0; i < 3; i++) {
+            send_message_queue(PWL_CID_GET_PCIE_OEM_VERSION);
+            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_PCIE_OEM_VERSION]);
+            }
+            if (g_oem_version != NULL && strlen(g_oem_version) > 0) {
+                break;
+            } else {
+                g_usleep(1000*500);
+                continue;
+            }
+        }
+        // Get DPV version
+        for (int i = 0; i < 3; i++) {
+            send_message_queue(PWL_CID_GET_PCIE_DPV_VERSION);
+            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_PCIE_DPV_VERSION]);
+            }
+            if (g_dpv_version != NULL && strlen(g_dpv_version) > 0) {
+                break;
+            } else {
+                g_usleep(1000*500);
+                continue;
+            }
+        }
     }
 
     for (int i = 0; i < 3; i++) {
@@ -510,10 +567,42 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 break;
             case PWL_CID_GET_AP_VER:
                 if (g_ap_version != NULL)
-                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK,g_ap_version);
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_ap_version);
                 else {
                     send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, "");
                     PWL_LOG_ERR("AP version not ready!");
+                }
+                break;
+            case PWL_CID_GET_MD_VER:
+                if (g_modem_version != NULL)
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_modem_version);
+                else {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, "");
+                    PWL_LOG_ERR("Modem version not ready!");
+                }
+                break;
+            case PWL_CID_GET_OP_VER:
+                if (g_op_version != NULL)
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_op_version);
+                else {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, "");
+                    PWL_LOG_ERR("OP version not ready!");
+                }
+                break;
+            case PWL_CID_GET_OEM_VER:
+                if (g_oem_version != NULL)
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_oem_version);
+                else {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, "");
+                    PWL_LOG_ERR("OEM version not ready!");
+                }
+                break;
+            case PWL_CID_GET_DPV_VER:
+                if (g_dpv_version != NULL)
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_dpv_version);
+                else {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, "");
+                    PWL_LOG_ERR("DPV version not ready!");
                 }
                 break;
             case PWL_CID_UPDATE_FW_VER:
@@ -575,6 +664,100 @@ static gpointer msg_queue_thread_func(gpointer data) {
                     PWL_LOG_DEBUG("FW version abnormal, abort!");
                 pthread_cond_signal(&g_cond);
                 break;
+            case PWL_CID_GET_PCIE_DEVICE_VERSION:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if ((message.status == PWL_CID_STATUS_OK || message.status == PWL_CID_STATUS_ERROR) &&
+                        strlen(message.response) > 0 &&
+                        strstr(message.response, "RMM")) {
+                        split_pcie_device_versions(message.response);
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_PCIE_OP_VERSION:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE ) {
+                    if ((message.status == PWL_CID_STATUS_OK || message.status == PWL_CID_STATUS_ERROR) &&
+                        strlen(message.response) > 0 &&
+                        strstr(message.response, "OP.")) {
+
+                        int index = 0;
+                        char *splitted_str;
+                        if (g_op_version) {
+                            free(g_op_version);
+                            g_op_version = NULL;
+                        }
+                        g_op_version = malloc(MAX_PCIE_VERSION_LENGTH);
+                        memset(g_op_version, 0, sizeof(g_op_version));
+                        splitted_str = strtok(message.response, " ");
+                        while (splitted_str != NULL) {
+                            splitted_str = strtok(NULL, " ");
+                            if (splitted_str != NULL) {
+                                strcpy(g_op_version, splitted_str);
+                                g_op_version[strcspn(g_op_version, "\n")] = 0;
+                                PWL_LOG_DEBUG("OP Version: %s", g_op_version);
+                                break;
+                            }
+                        }
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_PCIE_OEM_VERSION:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if ((message.status == PWL_CID_STATUS_OK || message.status == PWL_CID_STATUS_ERROR) &&
+                        strlen(message.response) > 0 &&
+                        strstr(message.response, "OEM.")) {
+
+                        int index = 0;
+                        char *splitted_str;
+                        if (g_oem_version) {
+                            free(g_oem_version);
+                            g_oem_version = NULL;
+                        }
+                        g_oem_version = malloc(MAX_PCIE_VERSION_LENGTH);
+                        memset(g_oem_version, 0, sizeof(g_oem_version));
+                        splitted_str = strtok(message.response, " ");
+                        while (splitted_str != NULL) {
+                            splitted_str = strtok(NULL, " ");
+                            if (splitted_str != NULL) {
+                                strcpy(g_oem_version, splitted_str);
+                                g_oem_version[strcspn(g_oem_version, "\n")] = 0;
+                                PWL_LOG_DEBUG("OEM Version: %s", g_oem_version);
+                                break;
+                            }
+                        }
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_PCIE_DPV_VERSION:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if ((message.status == PWL_CID_STATUS_OK || message.status == PWL_CID_STATUS_ERROR) &&
+                        strlen(message.response) > 0 &&
+                        strstr(message.response, "DPV")) {
+
+                        int index = 0;
+                        char *splitted_str;
+                        if (g_dpv_version) {
+                            free(g_dpv_version);
+                            g_dpv_version = NULL;
+                        }
+                        g_dpv_version = malloc(MAX_PCIE_VERSION_LENGTH);
+                        memset(g_dpv_version, 0, sizeof(g_dpv_version));
+                        splitted_str = strtok(message.response, " ");
+                        while (splitted_str != NULL) {
+                            splitted_str = strtok(NULL, " ");
+                            if (splitted_str != NULL) {
+                                strcpy(g_dpv_version, splitted_str);
+                                g_dpv_version[strcspn(g_dpv_version, "\n")] = 0;
+                                PWL_LOG_DEBUG("DPV Version: %s", g_dpv_version);
+                                break;
+                            }
+                        }
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
             case PWL_CID_GET_PREF_CARRIER:
                 if (message.status == PWL_CID_STATUS_OK) {
                     if (DEBUG) PWL_LOG_DEBUG("PREF Carrier: %s", message.response);
@@ -611,6 +794,64 @@ static gpointer msg_queue_thread_func(gpointer data) {
     }
 
     return NULL;
+}
+
+void split_pcie_device_versions(char *sw_version) {
+    char *splitted_str;
+    char *temp;
+    int index = 0;
+    char full_version[MAX_PCIE_VERSION_LENGTH] = {0};
+
+    if (g_modem_version) {
+        free(g_modem_version);
+        g_modem_version = NULL;
+    }
+    if (g_ap_version) {
+        free(g_ap_version);
+        g_ap_version = NULL;
+    }
+
+    if (sw_version == NULL || strlen(sw_version) <= 0) {
+        PWL_LOG_ERR("sw_version abnormal, split failed!");
+        return;
+    }
+
+    // Remove "SW VERSION"
+    temp = strstr(sw_version, "RMM");
+    if (DEBUG) {
+        PWL_LOG_DEBUG("sw_version: %s", sw_version);
+        PWL_LOG_DEBUG("temp: %s, index: %d, strlen: %ld", temp, index, strlen(sw_version));
+    }
+    if (temp) {
+        index = temp - sw_version;
+    } else {
+        PWL_LOG_ERR("sw_version not include fw version, split failed!");
+        return;
+    }
+
+    strncpy(full_version, sw_version+index, strlen(sw_version) - index);
+    if(DEBUG) PWL_LOG_DEBUG("sw version: %s", full_version);
+
+    // Split modem and ap version
+    g_modem_version = malloc(MAX_PCIE_VERSION_LENGTH);
+    memset(g_modem_version, 0, MAX_PCIE_VERSION_LENGTH);
+    g_ap_version = malloc(MAX_PCIE_AP_VERSION_LENGTH);
+    memset(g_ap_version, 0, MAX_PCIE_AP_VERSION_LENGTH);
+    index = 0;
+    splitted_str = strtok(full_version, "_");
+    if (splitted_str != NULL)
+        strcpy(g_modem_version, splitted_str);
+
+    while(splitted_str != NULL) {
+        splitted_str = strtok(NULL, "_");
+        if (splitted_str != NULL) {
+            strcpy(g_ap_version, splitted_str);
+            g_ap_version[strcspn(g_ap_version, "\n")] = 0;
+            break;
+        }
+    }
+    PWL_LOG_DEBUG("modem version: %s", g_modem_version);
+    PWL_LOG_DEBUG("ap version: %s", g_ap_version);
 }
 
 void split_fw_versions(char *fw_version) {
