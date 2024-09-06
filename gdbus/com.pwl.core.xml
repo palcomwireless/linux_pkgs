@@ -23,6 +23,10 @@
     <signal name="GetFwVersionSignal">
     </signal>
 
+    <signal name="NoticeModuleRecoveryFinish">
+        <arg name="type" type="i" />
+    </signal>
+
     <signal name="SubscriberReadyStateChange">
         <arg name="status" type="i" />
     </signal>
@@ -31,6 +35,9 @@
     </signal>
 
     <method name="MadptReadyMethod">
+    </method>
+
+    <method name="RequestUpdateFwVersionMethod">
     </method>
 
     <method name="ReadyToFccUnlockMethod">
