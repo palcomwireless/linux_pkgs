@@ -4,6 +4,7 @@ INCLUDE_DIRECTORIES(inc)
 INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/includes)
 INCLUDE_DIRECTORIES(/usr/include/gio-unix-2.0)
 INCLUDE_DIRECTORIES(${PROJECT_BINARY_DIR}/)
+INCLUDE_DIRECTORIES(/usr/include/libxml2/)
 
 file(GLOB FB_SRC fastboot/*.cpp)
 
@@ -11,7 +12,7 @@ add_compile_options(-Wno-ignored-attributes)
 
 add_executable(pwl_fwupdate pwl_fwupdate.c fb_programing.c ${FB_SRC} ${PROJECT_SOURCE_DIR}/common/common.c ${PROJECT_BINARY_DIR}/CoreGdbusGenerated.c)
 
-target_link_libraries(pwl_fwupdate ${GLIB_LIBRARIES} pthread)
+target_link_libraries(pwl_fwupdate ${GLIB_LIBRARIES} pthread xml2)
 
 target_include_directories(pwl_fwupdate PRIVATE ${GLIB_INCLUDE_DIRS})
 

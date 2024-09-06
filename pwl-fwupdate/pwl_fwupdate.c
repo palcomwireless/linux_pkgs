@@ -63,8 +63,10 @@
 
 #define FW_VERSION_LENGTH   12
 #define OEM_PRI_VERSION_LENGTH  12
+#define OTHER_VERSION_LENGTH   36
 #define USB_SERIAL_BUF_SIZE  1024
 
+static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
 static GMainLoop *gp_loop = NULL;
 static pwlCore *gp_proxy = NULL;
 static gulong g_ret_signal_handler[RET_SIGNAL_HANDLE_SIZE];
@@ -81,7 +83,7 @@ char g_pref_carrier[MAX_PATH];
 char g_skuid[PWL_MAX_SKUID_SIZE] = {0};
 char *g_oem_sku_id;
 char g_device_package_ver[DEVICE_PACKAGE_VERSION_LENGTH];
-char g_current_fw_ver[FW_VERSION_LENGTH];
+char g_current_fw_ver[FW_VERSION_LENGTH] = {0};
 char g_oem_pri_ver[OEM_PRI_VERSION_LENGTH];
 gboolean gb_del_tune_code_ret = FALSE;
 gboolean gb_set_oem_pri_ver_ret = FALSE;
@@ -109,9 +111,10 @@ gboolean g_is_fastboot_cmd_error = FALSE;
 // int g_check_fastboot_retry_count;
 // int g_wait_modem_port_retry_count;
 // int g_wait_at_port_retry_count;
-int g_fw_update_retry_count;
 int g_do_hw_reset_count;
+int g_fw_update_retry_count;
 int g_need_retry_fw_update;
+bool g_need_update = false;
 
 static signal_callback_t g_signal_callback;
 static bool register_client_signal_handler(pwlCore *p_proxy);
@@ -159,6 +162,20 @@ char env_variable[64] = {0};
 int env_variable_length = 64;
 char set_env_variable[256] = {0};
 
+// For pcie device
+char g_pcie_download_image_list[MAX_DONWLOAD_IMAGES][MAX_IMG_FILE_NAME_LEN];
+char g_t7xx_mode_node[MAX_IMG_FILE_NAME_LEN] = {0};
+char g_t7xx_mode_remove_node[MAX_IMG_FILE_NAME_LEN] = {0};
+char g_current_md_ver[OTHER_VERSION_LENGTH] = {0};
+char g_current_op_ver[OTHER_VERSION_LENGTH] = {0};
+char g_current_oem_ver[OTHER_VERSION_LENGTH] = {0};
+char g_current_dpv_ver[OTHER_VERSION_LENGTH] = {0};
+char g_pcie_fastboot_port[32] = {0};
+int  g_pcie_img_number_count = 0;
+int  g_update_type = 0;
+int  g_update_based_type = 0;
+int  g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
+char g_dpv_image_checksum[MAX_CHECKSUM_LEN] = {0};
 
 #define GET_KEY_FROM_IMAGE 
 
@@ -531,9 +548,24 @@ void* msg_queue_thread_func() {
                 // pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_GET_AP_VER:
-                if (strlen(message.response) > 3) {
-                    // TODO: Find a good way to detect if correct AP version
-                    if (strncmp(message.response, "00.", 3) == 0) {
+                if (g_device_type == PWL_DEVICE_TYPE_USB) {
+                    if (strlen(message.response) > 3) {
+                        // TODO: Find a good way to detect if correct AP version
+                        if (strncmp(message.response, "00.", 3) == 0) {
+                            strcpy(g_current_fw_ver, message.response);
+                            PWL_LOG_DEBUG("AP VER: %s", g_current_fw_ver);
+                            g_is_get_fw_ver = TRUE;
+                        } else {
+                            PWL_LOG_ERR("AP VER not match");
+                            g_is_get_fw_ver = FALSE;
+                        }
+
+                    } else {
+                        PWL_LOG_ERR("AP VER Error");
+                        g_is_get_fw_ver = FALSE;
+                    }
+                } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if (strlen(message.response) > 3) {
                         strcpy(g_current_fw_ver, message.response);
                         PWL_LOG_DEBUG("AP VER: %s", g_current_fw_ver);
                         g_is_get_fw_ver = TRUE;
@@ -541,10 +573,53 @@ void* msg_queue_thread_func() {
                         PWL_LOG_ERR("AP VER not match");
                         g_is_get_fw_ver = FALSE;
                     }
-
                 } else {
-                    PWL_LOG_ERR("AP VER Error");
+                    PWL_LOG_ERR("Device type unknow, abort!");
                     g_is_get_fw_ver = FALSE;
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_MD_VER:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if (strlen(message.response) > 3) {
+                        if (strncmp(message.response, "RMM", 3) == 0) {
+                            strcpy(g_current_md_ver, message.response);
+                            PWL_LOG_DEBUG("MD VER: %s", g_current_md_ver);
+                        }
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_OP_VER:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if (strlen(message.response) > 3) {
+                        if (strncmp(message.response, "OP.", 3) == 0) {
+                            strcpy(g_current_op_ver, message.response);
+                            PWL_LOG_DEBUG("OP VER: %s", g_current_op_ver);
+                        }
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_OEM_VER:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if (strlen(message.response) > 3) {
+                        if (strncmp(message.response, "OEM", 3) == 0) {
+                            strcpy(g_current_oem_ver, message.response);
+                            PWL_LOG_DEBUG("OEM VER: %s", g_current_oem_ver);
+                        }
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_DPV_VER:
+                if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                    if (strlen(message.response) > 3) {
+                        if (strncmp(message.response, "DPV", 3) == 0) {
+                            strcpy(g_current_dpv_ver, message.response);
+                            PWL_LOG_DEBUG("DPV VER: %s", g_current_dpv_ver);
+                        }
+                    }
                 }
                 pthread_cond_signal(&g_cond);
                 break;
@@ -1147,12 +1222,25 @@ int get_time_info( char print_time )
    return (int)current_time;
 }
 
-void close_progress_msg_box() {
+
+void close_progress_msg_box(int close_type) {
+    char close_message[64] = {0};
+    switch (close_type) {
+        case CLOSE_TYPE_ERROR:
+            sprintf(close_message, "%s", "#Modem firmware update failed!\\n\\n\n");
+            break;
+        case CLOSE_TYPE_SKIP:
+            sprintf(close_message, "%s", "#Modem firmware is up to date\\n\\n\n");
+            break;
+        default:
+            break;
+    }
     if (g_progress_fp != NULL) {
         g_progress_percent = 98;
-        update_progress_dialog(1, NULL, "#Modem firmware update failed!\\n\\n\n");
+        if (DEBUG) PWL_LOG_DEBUG("close message: %s", close_message);
+        update_progress_dialog(1, NULL, close_message);
         g_usleep(1000*1000*3);
-        update_progress_dialog(1, NULL, "#Modem firmware update failed!\\n\\n\n");
+        update_progress_dialog(1, NULL, close_message);
         pclose(g_progress_fp);
         g_progress_fp = NULL;
     }
@@ -1597,6 +1685,7 @@ void *monitor_package_func2()
     char buf[BUFSIZ];
     int i = 0;
     buf[sizeof(buf) - 1] = 0;
+    int already_retry_count;
 
 INOTIFY_AGAIN:
     wd = inotify_add_watch(fd, IMAGE_MONITOR_PATH, IN_ALL_EVENTS);
@@ -1621,14 +1710,45 @@ INOTIFY_AGAIN:
                 {
                     if(DEBUG) PWL_LOG_DEBUG("%s --- %s", event->name, event_str[i]);
                     if (strcmp(event->name, MONITOR_FOLDER_NAME) == 0 &&
-                        strcmp(event_str[i], "IN_MOVED_TO") == 0)
-                    {
-                        PWL_LOG_DEBUG("Check update zip file");
-                        sleep(2);
-                        if (extract_update_files() == 0)
-                        {
-                            PWL_LOG_DEBUG("Start update process");
-                            start_update_process(FALSE);
+                        strcmp(event_str[i], "IN_MOVED_TO") == 0) {
+                        if (g_device_type == PWL_DEVICE_TYPE_USB) {
+                            PWL_LOG_DEBUG("Check update zip file");
+                            sleep(2);
+                            if (extract_update_files() == 0) {
+                                PWL_LOG_DEBUG("Start update process");
+                                start_update_process(FALSE);
+                            }
+                        } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+                            if (g_is_fw_update_processing == NOT_IN_FW_UPDATE_PROCESSING) {
+                                PWL_LOG_DEBUG("Check update flz file");
+                                sleep(2);
+                                if (check_update_data(TYPE_FLASH_FLZ) == RET_OK) {
+                                    // Notice pref update version.
+                                    if (DEBUG) PWL_LOG_DEBUG("[Notice] Send signal to pref to get version and wait 7 secs");
+                                    pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
+                                    sleep(7);
+                                    if (start_update_process_pcie(FALSE, PCIE_UPDATE_BASE_FLZ) == RET_OK) {
+                                        // Download success, remove flash data folder
+                                        remove_flash_data(g_update_type);
+                                    } else {
+                                        if (g_need_update) {
+                                            get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                                            PWL_LOG_DEBUG("[Notice] already_retry_count: %d", already_retry_count);
+                                            while (already_retry_count < FW_UPDATE_RETRY_TH) {
+                                                PWL_LOG_DEBUG("[Notice] Retry fw udpate");
+                                                if (start_update_process_pcie(TRUE, PCIE_UPDATE_BASE_FLZ) == RET_OK) {
+                                                    remove_flash_data(g_update_type);
+                                                    break;
+                                                } else {
+                                                    get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                PWL_LOG_DEBUG("During fw update process, skip.");
+                            }
                         }
                     }
                 }
@@ -1766,8 +1886,8 @@ gint get_current_fw_version()
     int err, retry = 0;
     memset(g_current_fw_ver, 0, FW_VERSION_LENGTH);
 
-    while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
-    {
+    memset(g_current_fw_ver, 0, sizeof(g_current_fw_ver));
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
         err = 0;
         send_message_queue(PWL_CID_GET_AP_VER);
         pthread_mutex_lock(&g_mutex);
@@ -1780,14 +1900,132 @@ gint get_current_fw_version()
             err = 1;
         }
         pthread_mutex_unlock(&g_mutex);
-        if (err)
-        {
+        if (err) {
             retry++;
             continue;
         }
-        return 0;
+
+        if (g_device_type == PWL_DEVICE_TYPE_USB) {
+            return RET_OK;
+        } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+            break;
+        } else {
+            return RET_FAILED;
+        }
     }
-    return -1;
+    if(strlen(g_current_fw_ver) <= 0) {
+        PWL_LOG_ERR("Get AP version error, abort!");
+        return RET_FAILED;
+    }
+
+    // Get MD, OP, OEM and DPV version for pcie device
+    if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        // MD version
+        memset(g_current_md_ver, 0, sizeof(g_current_md_ver));
+        while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+            err = 0;
+            send_message_queue(PWL_CID_GET_MD_VER);
+            pthread_mutex_lock(&g_mutex);
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+            int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+            if (result == ETIMEDOUT || result != 0) {
+                PWL_LOG_ERR("Time out to get MD version, retry.");
+                err = 1;
+            }
+            pthread_mutex_unlock(&g_mutex);
+            if (err) {
+                retry++;
+                continue;
+            }
+            break;
+        }
+        if (strlen(g_current_md_ver) <= 0) {
+            PWL_LOG_ERR("Get MD version error, abort!");
+            return RET_FAILED;
+        }
+
+        // OP version
+        memset(g_current_op_ver, 0, sizeof(g_current_op_ver));
+        while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+            err = 0;
+            send_message_queue(PWL_CID_GET_OP_VER);
+            pthread_mutex_lock(&g_mutex);
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+            int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+            if (result == ETIMEDOUT || result != 0) {
+                PWL_LOG_ERR("Time out to get OP version, retry.");
+                err = 1;
+            }
+            pthread_mutex_unlock(&g_mutex);
+            if (err) {
+                retry++;
+                continue;
+            }
+            break;
+        }
+        if (strlen(g_current_op_ver) <= 0) {
+            PWL_LOG_ERR("Get OP version error, abort!");
+            return RET_FAILED;
+        }
+
+        // OEM version
+        memset(g_current_oem_ver, 0, sizeof(g_current_oem_ver));
+        while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+            err = 0;
+            send_message_queue(PWL_CID_GET_OEM_VER);
+            pthread_mutex_lock(&g_mutex);
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+            int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+            if (result == ETIMEDOUT || result != 0) {
+                PWL_LOG_ERR("Time out to get OEM version, retry.");
+                err = 1;
+            }
+            pthread_mutex_unlock(&g_mutex);
+            if (err) {
+                retry++;
+                continue;
+            }
+            break;
+        }
+        if (strlen(g_current_oem_ver) <= 0) {
+            PWL_LOG_ERR("Get OEM version error, abort!");
+            return RET_FAILED;
+        }
+
+        //DPV version
+        memset(g_current_dpv_ver, 0, sizeof(g_current_dpv_ver));
+        while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+            err = 0;
+            send_message_queue(PWL_CID_GET_DPV_VER);
+            pthread_mutex_lock(&g_mutex);
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+            int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+            if (result == ETIMEDOUT || result != 0) {
+                PWL_LOG_ERR("Time out to get DPV version, retry.");
+                err = 1;
+            }
+            pthread_mutex_unlock(&g_mutex);
+            if (err) {
+                retry++;
+                continue;
+            }
+            break;
+        }
+        if (strlen(g_current_dpv_ver) <= 0) {
+            PWL_LOG_ERR("Get DPV version error, abort!");
+            return RET_FAILED;
+        }
+        return RET_OK;
+    }
+    return RET_FAILED;
 }
 
 gint set_preferred_carrier()
@@ -2372,14 +2610,14 @@ int start_update_process(gboolean is_startup)
     if (get_current_fw_version() != 0)
     {
         PWL_LOG_ERR("Get current FW version error!");
-        close_progress_msg_box();
+        close_progress_msg_box(CLOSE_TYPE_ERROR);
         return -1;
     }
 
     // Get OEM PRI version
     if (!get_oem_pri_version()) {
         PWL_LOG_ERR("Get oem pri version error!");
-        close_progress_msg_box();
+        close_progress_msg_box(CLOSE_TYPE_ERROR);
         return -1;
     }
 
@@ -2389,7 +2627,7 @@ int start_update_process(gboolean is_startup)
     if (prepare_update_images() != 0)
     {
         PWL_LOG_ERR("Get update images error!");
-        close_progress_msg_box();
+        close_progress_msg_box(CLOSE_TYPE_ERROR);
         return -1;
     }
 
@@ -2414,7 +2652,7 @@ int start_update_process(gboolean is_startup)
         if (get_preferred_carrier() != 0)
         {
             PWL_LOG_ERR("Get preferred carrier error!");
-            close_progress_msg_box();
+            close_progress_msg_box(CLOSE_TYPE_ERROR);
             return -1;
         }
     }
@@ -2425,7 +2663,7 @@ int start_update_process(gboolean is_startup)
     if (get_sku_id() != 0)
     {
         PWL_LOG_ERR("Get SKU ID error!");
-        close_progress_msg_box();
+        close_progress_msg_box(CLOSE_TYPE_ERROR);
         return -1;
     }
     else
@@ -2573,6 +2811,71 @@ gboolean dbus_service_is_ready(void) {
     }
 }
 
+void remove_flash_data(int type) {
+    PWL_LOG_DEBUG("Remove flash data folder");
+    switch (type) {
+        case UPDATE_TYPE_FULL:
+            remove_folder(UPDATE_FW_FOLDER_FILE);
+            remove_folder(UPDATE_DEV_FOLDER_FILE);
+            break;
+        case UPDATE_TYPE_ONLY_FW:
+            remove_folder(UPDATE_FW_FOLDER_FILE);
+            break;
+        case UPDATE_TYPE_ONLY_DEV:
+            remove_folder(UPDATE_DEV_FOLDER_FILE);
+            break;
+        default:
+            break;
+    }
+    // Remvoe fw update status record
+    /*
+    if (0 == access(FW_UPDATE_STATUS_RECORD, F_OK)) {
+        remove(FW_UPDATE_STATUS_RECORD);
+    }*/
+}
+
+void signal_callback_notice_module_recovery_finish(int type) {
+    int already_retry_count;
+    if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        PWL_LOG_DEBUG("[Notice] Receive module recovery finish signal!");
+        PWL_LOG_DEBUG("[Notice] type is: %d", type);
+        PWL_LOG_DEBUG("[Notice] Sleep 10 secs to wait pref update version");
+        sleep(10);
+        if (check_update_data(type) != RET_OK) {
+            PWL_LOG_ERR("Check flash data error, abort.");
+            return;
+        }
+        if (start_update_process_pcie(TRUE, type) == RET_OK) {
+            // Download success, remove flash data folder
+            remove_flash_data(g_update_type);
+            return;
+        } else {
+            if (g_need_update) {
+                get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                PWL_LOG_DEBUG("[Notice] already_retry_count: %d", already_retry_count);
+                while (already_retry_count < FW_UPDATE_RETRY_TH) {
+                    PWL_LOG_DEBUG("[Notice] Retry fw udpate");
+                    if (start_update_process_pcie(TRUE, type) == RET_OK) {
+                        remove_flash_data(g_update_type);
+                        break;
+                    } else {
+                        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                    }
+                }
+            }
+        }
+    }
+    return;
+}
+
+static gboolean signal_notice_module_recovery_finish_handler(pwlCore *object, int arg_type, gpointer userdata) {
+   if (NULL != g_signal_callback.callback_notice_module_recovery_finish) {
+       g_signal_callback.callback_notice_module_recovery_finish(arg_type);
+   }
+
+   return TRUE;
+}
+
 //void signal_callback_retry_fw_update(const gchar* arg) {
 //    PWL_LOG_DEBUG("Receive retry fw update request!");
 //    start_update_process();
@@ -2605,6 +2908,8 @@ bool register_client_signal_handler(pwlCore *p_proxy) {
     g_ret_signal_handler[0] = g_signal_connect(p_proxy, "notify::g-name-owner", G_CALLBACK(cb_owner_name_changed_notify), NULL);
     //g_ret_signal_handler[1] = g_signal_connect(p_proxy, "request-retry-fw-update-signal",
     //                                           G_CALLBACK(signal_get_retry_fw_update_handler), NULL);
+    g_ret_signal_handler[1] = g_signal_connect(p_proxy, "notice-module-recovery-finish",
+                                              G_CALLBACK(signal_notice_module_recovery_finish_handler), NULL);
     return TRUE;
 }
 
@@ -2616,18 +2921,1324 @@ void registerSignalCallback(signal_callback_t *callback) {
     }
 }
 
+int unzip_flz(char *flz_file, char *unzip_folder) {
+    FILE *zip_file = NULL;
+    char command[MAX_COMMAND_LEN] = {0};
+    int ret = -1;
+    zip_file = fopen(flz_file, "r");
+    if (zip_file != NULL) {
+        if (DEBUG)
+            sprintf(command, "unzip -o %s -d %s", flz_file, unzip_folder);
+        else
+            sprintf(command, "unzip -o -qq %s -d %s", flz_file, unzip_folder);
+
+        ret = system(command);
+
+        fclose(zip_file);
+        return RET_OK;
+    }
+    return RET_FAILED;
+}
+
+xmlXPathObjectPtr get_node_set(xmlDocPtr doc, xmlChar *xpath) {
+    xmlXPathContextPtr context;
+    xmlXPathObjectPtr result;
+
+    context = xmlXPathNewContext(doc);
+    if (context == NULL) {
+        PWL_LOG_ERR("xmlXPathNewContext error!");
+        return NULL;
+    }
+
+    result = xmlXPathEvalExpression(xpath, context);
+    xmlXPathFreeContext(context);
+    if (result == NULL) {
+        PWL_LOG_ERR("xmlXPathEvalExpression error!");
+        return NULL;
+    }
+
+    if(xmlXPathNodeSetIsEmpty(result->nodesetval)){
+        xmlXPathFreeObject(result);
+        PWL_LOG_DEBUG("Path empty");
+        return NULL;
+    }
+    return result;
+}
+
+int find_image_file_path(char *image_file_name, char *find_prefix, char *image_path) {
+    FILE *fp;
+    char find_command[MAX_IMG_FILE_NAME_LEN] = {0};
+    sprintf(find_command, "find %s -name %s", find_prefix, image_file_name);
+
+    // PWL_LOG_DEBUG("%s", find_command);
+
+    fp = popen(find_command, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("find image path error!");
+        return RET_FAILED;
+    }
+    char buffer[MAX_IMG_FILE_NAME_LEN] = {0};
+    char *ret = fgets(buffer, sizeof(buffer), fp);
+    pclose(fp);
+
+    buffer[strcspn(buffer, "\n")] = 0;
+
+    if (strlen(buffer) <= 0)
+        return RET_FAILED;
+
+    strncpy(image_path, buffer, strlen(buffer));
+    return RET_OK;
+}
+
+int find_fw_download_image(char *subsysid, char *version) {
+    xmlDoc *doc;
+    // xmlNode *root_element;
+    xmlChar *xpath_oemssid = (xmlChar*) "//OEMSSID";
+    xmlChar *xpath_ap_firmware = (xmlChar*) "//APFirmware";
+    xmlChar *xpath_md_firmware = (xmlChar*) "//MDFirmware";
+    xmlChar *xpath_op_firmware = (xmlChar*) "//OPFirmware";
+    xmlChar *xpath_oem_firmware = (xmlChar*) "//OEMFirmware";
+
+    xmlXPathObjectPtr xpath_obj;
+    xmlXPathObjectPtr xpath_ap_firmware_obj;
+    xmlXPathObjectPtr xpath_md_firmware_obj;
+    xmlXPathObjectPtr xpath_op_firmware_obj;
+    xmlXPathObjectPtr xpath_oem_firmware_obj;
+
+    xmlNodeSetPtr nodeset = NULL;
+    xmlNodeSetPtr nodeset_ap_firmware = NULL;
+    xmlNodeSetPtr nodeset_md_firmware = NULL;
+    xmlNodeSetPtr nodeset_op_firmware = NULL;
+    xmlNodeSetPtr nodeset_oem_firmware = NULL;
+
+    xmlChar *subsysid_value = NULL;
+    xmlNode *oemssid_node = NULL;
+    xmlNode *temp_node = NULL;
+    int default_subsysid_index = -1;
+    int subsysid_index = -1;
+    int img_number_count = 0;
+    char xml_file[MAX_IMG_FILE_NAME_LEN] = {0};
+    char file_folder[10] = {0};
+    char temp_find_prefix[MAX_IMG_FILE_NAME_LEN] = {0};
+    char temp_file_path[MAX_IMG_FILE_NAME_LEN] = {0};
+    char temp_version_info[OTHER_VERSION_LENGTH] = {0};
+    sprintf(xml_file, "%s/%s", UNZIP_FOLDER_FW, "FwPackageInfo.xml");
+
+    doc = xmlReadFile(xml_file, NULL, 0);
+    if (doc == NULL) {
+        PWL_LOG_ERR("Read xml failed!");
+        return RET_FAILED;
+    }
+
+    // Check Subsysid
+    xpath_obj = get_node_set(doc, xpath_oemssid);
+    if (xpath_obj) {
+        nodeset = xpath_obj->nodesetval;
+        // printf("%s count: %d\n", xpath_oemssid, nodeset->nodeNr);
+        for (int i = 0; i < nodeset->nodeNr; i++) {
+            subsysid_value = xmlGetProp(nodeset->nodeTab[i], (xmlChar *) "Subsysid");
+
+            if (xmlStrcmp(subsysid_value, "default") == 0) {
+                default_subsysid_index = i;
+            } else if (xmlStrcmp(subsysid_value, subsysid) == 0) {
+                subsysid_index = i;
+            }
+            if (subsysid_index < 0)
+                subsysid_index = default_subsysid_index;
+        }
+        if (DEBUG) PWL_LOG_DEBUG("Target subsysid index: %d", subsysid_index);
+
+        oemssid_node = nodeset->nodeTab[subsysid_index];
+        // PWL_LOG_DEBUG("%s", oemssid_node->name);
+
+        //Find all ap firmware file
+        xpath_ap_firmware_obj = get_node_set(oemssid_node->doc, xpath_ap_firmware);
+        if (xpath_ap_firmware_obj) {
+            nodeset_ap_firmware = xpath_ap_firmware_obj->nodesetval;
+            // printf("File: %s, Ver: %s, Type: %s\n", 
+            //     xmlGetProp(nodeset_ap_firmware->nodeTab[0], "File"),
+            //     xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"),
+            //     xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Type"));
+            memset(temp_version_info, 0, sizeof(temp_version_info));
+            strcpy(temp_version_info, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"));
+            strcpy(version, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"));
+
+            memset(temp_find_prefix, 0, sizeof(temp_find_prefix));
+            sprintf(temp_find_prefix, "%s/%s*", UNZIP_FOLDER_FW, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "File"));
+
+            for (temp_node = nodeset_ap_firmware->nodeTab[0]->children; temp_node; temp_node = temp_node->next) {
+                if (temp_node->type == XML_ELEMENT_NODE) {
+                    // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
+                    memset(temp_file_path, 0, sizeof(temp_file_path));
+                    find_image_file_path(xmlGetProp(temp_node, "File"), temp_find_prefix, temp_file_path);
+                    if (DEBUG) PWL_LOG_DEBUG("current ap: %s, flz ap: %s", g_current_fw_ver, temp_version_info);
+
+                    if (strlen(temp_file_path) > 0) {
+                        if (CHECK_AP_VERSION) {
+                            if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
+                                if (strncmp(g_current_fw_ver, temp_version_info, strlen(g_current_fw_ver)) == 0) {
+                                    sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                                } else {
+                                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                                }
+                            } else {
+                                strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                            }
+                        } else {
+                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                        }
+                        img_number_count++;
+                    }
+                }
+            }
+        }
+
+        //Find all md firmware file
+        xpath_md_firmware_obj = get_node_set(oemssid_node->doc, xpath_md_firmware);
+        if (xpath_md_firmware_obj) {
+            nodeset_md_firmware = xpath_md_firmware_obj->nodesetval;
+            // printf("File: %s, Ver: %s, Type: %s\n", 
+            //     xmlGetProp(nodeset_md_firmware->nodeTab[0], "File"),
+            //     xmlGetProp(nodeset_md_firmware->nodeTab[0], "Ver"),
+            //     xmlGetProp(nodeset_md_firmware->nodeTab[0], "Type"));
+            memset(temp_version_info, 0, sizeof(temp_version_info));
+            strcpy(temp_version_info, xmlGetProp(nodeset_md_firmware->nodeTab[0], "Ver"));
+
+            memset(temp_find_prefix, 0, sizeof(temp_find_prefix));
+            sprintf(temp_find_prefix, "%s/%s*", UNZIP_FOLDER_FW, xmlGetProp(nodeset_md_firmware->nodeTab[0], "File"));
+
+            for (temp_node = nodeset_md_firmware->nodeTab[0]->children; temp_node; temp_node = temp_node->next) {
+                if (temp_node->type == XML_ELEMENT_NODE) {
+                    // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
+                    memset(temp_file_path, 0, sizeof(temp_file_path));
+                    find_image_file_path(xmlGetProp(temp_node, "File"), temp_find_prefix, temp_file_path);
+                    if (DEBUG) PWL_LOG_DEBUG("current md: %s, flz md: %s", g_current_md_ver, temp_version_info);
+
+                    if (strlen(temp_file_path) > 0) {
+                        if (CHECK_MD_VERSION) {
+                            if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
+                                if (strncmp(g_current_md_ver, temp_version_info, strlen(g_current_md_ver)) == 0) {
+                                    sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                                } else {
+                                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                                }
+                            } else {
+                                strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                            }
+                        } else {
+                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                        }
+                        img_number_count++;
+                    }
+                }
+            }
+        }
+
+        //Find OP Firmware
+        xpath_op_firmware_obj = get_node_set(oemssid_node->doc, xpath_op_firmware);
+        if (xpath_op_firmware_obj) {
+            nodeset_op_firmware = xpath_op_firmware_obj->nodesetval;
+            temp_node = nodeset_op_firmware->nodeTab[0];
+            // printf("%s\n", xmlGetProp(temp_node, "File"));
+            memset(temp_version_info, 0, sizeof(temp_version_info));
+            sprintf(temp_version_info, "OP.%s", xmlGetProp(temp_node, "Ver"));
+            memset(temp_file_path, 0, sizeof(temp_file_path));
+            find_image_file_path(xmlGetProp(temp_node, "File"), UNZIP_FOLDER_FW, temp_file_path);
+            if (DEBUG) PWL_LOG_DEBUG("current op: %s, flz op: %s", g_current_op_ver, temp_version_info);
+
+            if (strlen(temp_file_path) > 0) {
+                if (CHECK_OP_VERSION) {
+                    if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
+                        if (strncmp(g_current_op_ver, temp_version_info, strlen(g_current_op_ver)) == 0) {
+                            sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                        } else {
+                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                        }
+                    } else {
+                        strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                    }
+                } else {
+                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                }
+                // strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                img_number_count++;
+            }
+        }
+
+        //Find OEM Firmware
+        xpath_oem_firmware_obj = get_node_set(oemssid_node->doc, xpath_oem_firmware);
+        if (xpath_oem_firmware_obj) {
+            nodeset_oem_firmware = xpath_oem_firmware_obj->nodesetval;
+            temp_node = nodeset_oem_firmware->nodeTab[0];
+            // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
+            memset(temp_version_info, 0, sizeof(temp_version_info));
+            sprintf(temp_version_info, "OEM.%s", xmlGetProp(temp_node, "Ver"));
+            memset(temp_file_path, 0, sizeof(temp_file_path));
+            find_image_file_path(xmlGetProp(temp_node, "File"), UNZIP_FOLDER_FW, temp_file_path);
+            if (DEBUG) PWL_LOG_DEBUG("current oem: %s, flz oem: %s", g_current_oem_ver, temp_version_info);
+
+            if (strlen(temp_file_path) > 0) {
+                if (CHECK_OEM_VERSION) {
+                    if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
+                        if (strncmp(g_current_oem_ver, temp_version_info, strlen(g_current_oem_ver)) == 0) {
+                            sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                        } else {
+                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                        }
+                    } else {
+                        strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                    }
+                } else {
+                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                }
+                // strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                img_number_count++;
+            }
+        }
+    }
+    g_pcie_img_number_count = img_number_count;
+    xmlXPathFreeObject(xpath_ap_firmware_obj);
+    xmlXPathFreeObject(xpath_md_firmware_obj);
+    xmlXPathFreeObject(xpath_op_firmware_obj);
+    xmlXPathFreeObject(xpath_oem_firmware_obj);
+    xmlXPathFreeObject(xpath_obj);
+    xmlFreeDoc(doc);
+    return RET_OK;
+}
+
+int find_device_image(char *sku_id) {
+    xmlDoc *doc;
+    xmlChar *xpath_sku_id = (xmlChar*) "//UniqueSkuID";
+    xmlXPathObjectPtr xpath_sku_id_obj;
+    xmlNodeSetPtr nodeset_sku_id = NULL;
+    xmlNode *temp_node = NULL;
+
+    char xml_file[MAX_IMG_FILE_NAME_LEN] = {0};
+    char image_name[MAX_IMG_FILE_NAME_LEN] = {0};
+    char image_path[MAX_IMG_FILE_NAME_LEN] = {0};
+
+    sprintf(xml_file, "%s/%s", UNZIP_FOLDER_DVP, "DevMappingTable.xml");
+    doc = xmlReadFile(xml_file, NULL, 0);
+
+    if (doc == NULL) {
+        PWL_LOG_ERR("Read xml failed!");
+        return RET_FAILED;
+    }
+
+    xpath_sku_id_obj = get_node_set(doc, xpath_sku_id);
+    // PWL_LOG_DEBUG("xpath_sku_id_obj: %s", xpath_sku_id_obj->nodesetval->nodeTab[0]->name);
+    nodeset_sku_id = xpath_sku_id_obj->nodesetval;
+    // nodeset_ap_firmware->nodeTab[0]->children
+    for (temp_node = nodeset_sku_id->nodeTab[0]; temp_node; temp_node = temp_node->next){
+        if (temp_node->type == XML_ELEMENT_NODE) {
+            if (strcmp(sku_id, xmlGetProp(temp_node, "ProductID")) == 0) {
+                sprintf(image_name, "%s.img", xmlGetProp(temp_node, "DevID"));
+                find_image_file_path(image_name, UNZIP_FOLDER_DVP, image_path);
+
+                if (DEBUG) PWL_LOG_DEBUG("Dev image: %s", image_path);
+                if (DEBUG) PWL_LOG_DEBUG("current dpv: %s, flz dpv: %s", g_current_dpv_ver, xmlGetProp(temp_node, "DevID"));
+
+                // Get checksum for Device package image
+                memset(g_dpv_image_checksum, 0, sizeof(g_dpv_image_checksum));
+                if (CHECK_CHECKSUM) {
+                    if (parse_checksum(DPV_CHECKSUM_PATH, image_name, g_dpv_image_checksum) != RET_OK) {
+                        PWL_LOG_ERR("Parse checksum of device package image error!");
+                        return RET_FAILED;
+                    }
+                }
+                if (CHECK_DPV_VERSION) {
+                    if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
+                        if (strncmp(g_current_dpv_ver, xmlGetProp(temp_node, "DevID"), strlen(g_current_dpv_ver)) == 0) {
+                            sprintf(g_pcie_download_image_list[g_pcie_img_number_count], "SKIP_%s", image_path);
+                        } else {
+                            strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+                        }
+                    } else {
+                        strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+                    }
+                } else {
+                    strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+                }
+                // strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+                g_pcie_img_number_count++;
+                break;
+            }
+        }
+    }
+    xmlXPathFreeObject(xpath_sku_id_obj);
+    xmlFreeDoc(doc);
+    return RET_OK;
+}
+
+int generate_download_table(char *xml_file) {
+    // Create download table file.
+    FILE *fp = fopen(FLASH_TABLE_FILE_NAME, "w");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Error to create flash_table!");
+        return RET_FAILED;
+    }
+    if (g_update_type == UPDATE_TYPE_ONLY_DEV) {
+        if (strstr(g_pcie_download_image_list[0], "DevPackage"))
+            fprintf(fp, "Flash|%s|%s|%s\n", "mcf2", g_pcie_download_image_list[0], g_dpv_image_checksum);
+        else {
+            PWL_LOG_ERR("Can't find DevPackage image, abort!");
+            fclose(fp);
+            return RET_FAILED;
+        }
+        fclose(fp);
+        return RET_OK;
+    } else {
+        xmlDoc *doc;
+        xmlNode *root_element;
+        doc = xmlReadFile(xml_file, NULL, 0);
+        if (doc == NULL) {
+            PWL_LOG_ERR("Read xml failed!");
+            fclose(fp);
+            return RET_FAILED;
+        }
+        root_element = xmlDocGetRootElement(doc);
+        // print_element_names(root_element);
+        xmlNode *cur_node = NULL;
+        xmlNode *child_node = NULL;
+        xmlNode *storage_type_node = NULL;
+        xmlNode *storage_type_child_node = NULL;
+        xmlAttr *attr = NULL;
+        xmlChar *value = NULL;
+        xmlNode *element = NULL;
+        xmlChar *element_value = NULL;
+        xmlChar *value_partition_name = NULL;
+        xmlChar *value_file_name = NULL;
+        xmlChar *value_is_download = NULL;
+        char *ret;
+        char temp_checksum[MAX_CHECKSUM_LEN] = {0};
+        char image_path[MAX_IMG_FILE_NAME_LEN] = {0};
+        int flash_count = 0;
+        bool is_find_mcf2 = false;
+
+        for (cur_node = root_element; cur_node; cur_node = cur_node->next) {
+            // attr = cur_node->properties;
+            for (child_node = root_element->children; child_node; child_node = child_node->next) {
+                if (child_node->type == XML_ELEMENT_NODE) {
+                    // PWL_LOG_DEBUG("node: %s", child_node->name);
+                    if (xmlStrcmp(child_node->name, "storage_type") == 0) {
+                        storage_type_node = child_node;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (storage_type_child_node = storage_type_node->children; storage_type_child_node; storage_type_child_node = storage_type_child_node->next) {
+            if (storage_type_child_node->type == XML_ELEMENT_NODE) {
+                if (xmlStrcmp(storage_type_child_node->name, "partition_index") == 0) {
+                    // Get partition index number
+                    attr = storage_type_child_node->properties;
+                    value = xmlGetProp(storage_type_child_node, (xmlChar *)"name");
+
+                    // Get partition name, file name and if download
+                    for (element = storage_type_child_node->children; element; element = element->next) {
+                        if (element->type == XML_ELEMENT_NODE) {
+                            if (xmlStrcmp(element->name, "partition_name") == 0) {
+                                value_partition_name = xmlNodeListGetString(element->doc, element->children, 1);
+                            } else if (xmlStrcmp(element->name, "file_name") == 0) {
+                                value_file_name = xmlNodeListGetString(element->doc, element->children, 1);
+                            } else if (xmlStrcmp(element->name, "is_download") == 0) {
+                                value_is_download = xmlNodeListGetString(element->doc, element->children, 1);
+                            }
+                        }
+                    }
+
+                    for (int i = 0; i < g_pcie_img_number_count; i++) {
+                        ret = strstr(g_pcie_download_image_list[i], value_file_name);
+                        // PWL_LOG_DEBUG("ret: %s, strstr: %s, %s", ret, g_pcie_download_image_list[i], value_file_name);
+                        if (ret) {
+                            flash_count++;
+                            // Skip mcf2 partition now, add later.
+                            if (strcmp(value_partition_name, "mcf2") == 0)
+                                continue;
+                            memset(temp_checksum, 0, sizeof(temp_checksum));
+                            if (CHECK_CHECKSUM) {
+                                parse_checksum(FW_PACKAGE_CHECKSUM_PATH, value_file_name, temp_checksum);
+                            }
+                            if (DEBUG) PWL_LOG_DEBUG("Flash|%s|%s|%s", value_partition_name, g_pcie_download_image_list[i], temp_checksum);
+                            fprintf(fp, "Flash|%s|%s|%s\n", value_partition_name, g_pcie_download_image_list[i], temp_checksum);
+                        }
+                    }
+                }
+            }
+        }
+        // Add Device image to flash list
+        if (g_update_type == UPDATE_TYPE_FULL) {
+            if (strstr(g_pcie_download_image_list[g_pcie_img_number_count - 1], "DevPackage") != 0) {
+                fprintf(fp, "Flash|%s|%s|%s\n", "mcf2", g_pcie_download_image_list[g_pcie_img_number_count - 1], g_dpv_image_checksum);
+            }
+        }
+
+        PWL_LOG_DEBUG("Flash %d partitions, %d images", flash_count, g_pcie_img_number_count);
+        xmlFreeNode(cur_node);
+        // xmlFreeNode(storage_type_node);
+        xmlFreeNode(storage_type_child_node);
+        xmlFreeNode(element);
+        xmlFreeNode(root_element);
+        xmlFree(doc);
+
+        fclose(fp);
+        return RET_OK;
+    }
+}
+
+int check_image_downlaod_table() {
+    // Check if the image file name in flasth table can find in scatter.xml
+    FILE *fp = NULL;
+    char temp_string[MAX_IMG_FILE_NAME_LEN] = {0};
+    char temp_list[MAX_DONWLOAD_IMAGES][MAX_IMG_FILE_NAME_LEN];
+    int count = 0;
+    bool is_find = false;
+    g_need_update = false;
+
+    fp = fopen(FLASH_TABLE_FILE_NAME, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Can't open flash table, check failed!");
+        return RET_FAILED;
+    }
+
+    while(fscanf(fp, "%s", temp_string) == 1) {
+        if (!strstr(temp_string, "SKIP_")) {
+            g_need_update = true;
+        }
+        strcpy(temp_list[count], temp_string);
+        count++;
+    }
+    fclose(fp);
+
+    if(!g_need_update) {
+        PWL_LOG_DEBUG("All image already up to date, didn't need update.\n");
+        return RET_FAILED;
+    }
+
+    for (int i = 0; i < g_pcie_img_number_count; i++) {
+        is_find = false;
+        for (int j = 0; j < count; j++) {
+            if (strstr(temp_list[j], g_pcie_download_image_list[i]) != 0) {
+                if (DEBUG) PWL_LOG_DEBUG("find: %s, in: %d", g_pcie_download_image_list[i], j);
+                is_find = true;
+                break;
+            }
+        }
+        if (!is_find) {
+            PWL_LOG_ERR("Failed, can't find %s", g_pcie_download_image_list[i]);
+            return RET_FAILED;
+        }
+    }
+    return RET_OK;
+}
+
+int parse_download_table_and_flash() {
+    FILE *fp = NULL;
+    char download_string[MAX_COMMAND_LEN] = {0};
+    char partition[MAX_IMG_FILE_NAME_LEN] = {0};
+    char image[MAX_IMG_FILE_NAME_LEN] = {0};
+    char checksum[MAX_CHECKSUM_LEN] = {0};
+    char *p;
+    int index = 0;
+
+    fp = fopen(FLASH_TABLE_FILE_NAME, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Can't open download table file.");
+        return RET_FAILED;
+    }
+
+    while(fscanf(fp, "%s", download_string) == 1) {
+        index = 0;
+        memset(partition, 0, sizeof(partition));
+        memset(image, 0, sizeof(image));
+        memset(checksum, 0, sizeof(checksum));
+
+        p = strtok(download_string, "|");
+        while(p != NULL) {
+            p = strtok(NULL, "|");
+            if (p != NULL) {
+                index++;
+                if (index == INDEX_PARTITION) {
+                    strcpy(partition, p);
+                } else if (index == INDEX_IMAGE) {
+                    strcpy(image, p);
+                    if (!CHECK_CHECKSUM)
+                        break;
+                } else if (index == INDEX_CHECKSUM) {
+                    strcpy(checksum, p);
+                    checksum[strcspn(checksum, "\n")] = 0;
+                }
+            }
+        }
+        if (DEBUG) PWL_LOG_DEBUG("flash %s %s", partition, image);
+        update_progress_dialog(40/g_pcie_img_number_count, "Download images...", NULL);
+
+        // Ignore SKIP images
+        if (strstr(image, "SKIP_")) {
+            PWL_LOG_DEBUG("Skip %s", image);
+            continue;
+        }
+        if (flash_image(partition, image, checksum) != RET_OK) {
+            PWL_LOG_ERR("Flash %s %s error!", partition, image);
+            fclose(fp);
+            close_progress_msg_box(CLOSE_TYPE_ERROR);
+            return RET_FAILED;
+        }
+    }
+    fclose(fp);
+    return RET_OK;
+}
+
+int query_t7xx_mode(char *mode) {
+    FILE *fp;
+    char command[MAX_COMMAND_LEN] = {0};
+    sprintf(command, "cat %s", g_t7xx_mode_node);
+    fp = popen(command, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("find t7xx_mode error!");
+        return RET_FAILED;
+    }
+    char buffer[MAX_COMMAND_LEN] = {0};
+    char *ret = fgets(buffer, sizeof(buffer), fp);
+    buffer[strcspn(buffer, "\n")] = 0;
+    strcpy(mode, buffer);
+    pclose(fp);
+
+    return RET_OK;
+}
+
+int find_fastboot_port(char *fastboot_port) {
+    FILE *fp;
+    fp = popen("find /dev/ -name wwan*fast*", "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("find port cmd error!!!");
+        return RET_FAILED;
+    }
+
+    char buffer[50];
+    memset(buffer, 0, sizeof(buffer));
+    char *ret = fgets(buffer, sizeof(buffer), fp);
+    pclose(fp);
+    buffer[strcspn(buffer, "\n")] = 0;
+
+    if (strlen(buffer) <= 0)
+        return RET_FAILED;
+
+    strcpy(fastboot_port, buffer);
+    return RET_OK;
+}
+
+int send_fastboot_command(char *command, char *response) {
+    int retry = 0;
+    char resp[MAX_COMMAND_LEN] = {0};
+
+    if (strlen(g_pcie_fastboot_port) <= 0)
+        find_fastboot_port(g_pcie_fastboot_port);
+
+    int fd = open(g_pcie_fastboot_port, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) {
+        PWL_LOG_ERR("Error opening serial port");
+        return RET_FAILED;
+    }
+    fd_set rset;
+    struct timeval time = {FASTBOOT_CMD_TIMEOUT_SEC, 0};
+    FD_ZERO(&rset);
+    FD_SET(fd, &rset);
+    // Send command to fastboot 
+    int bytesWritten = write(fd, command, strlen(command));
+    if (DEBUG) PWL_LOG_DEBUG("[send] %s > %s", command, g_pcie_fastboot_port);
+
+    // Read resp from fastboot
+    while (select(fd + 1, &rset, NULL, NULL, &time) > 0) {
+        memset(resp, 0, sizeof(resp));
+        ssize_t len = read(fd, resp, sizeof(resp));
+        if (len > 0) {
+            resp[strcspn(resp, "\n")] = 0;
+            if (DEBUG) PWL_LOG_DEBUG("[read] %s < %s", resp, g_pcie_fastboot_port);
+            strcpy(response, resp);
+            break;
+        }
+    }
+    int close_ret = close(fd);
+    return close_ret;
+}
+
+int get_fastboot_resp(char *response) {
+    int retry = 0;
+    char resp[MAX_COMMAND_LEN] = {0};
+
+    if (strlen(g_pcie_fastboot_port) <= 0)
+        find_fastboot_port(g_pcie_fastboot_port);
+
+    int fd = open(g_pcie_fastboot_port, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) {
+        PWL_LOG_ERR("Error opening serial port");
+        return RET_FAILED;
+    }
+    fd_set rset;
+    struct timeval time = {FASTBOOT_CMD_TIMEOUT_SEC, 0};
+    FD_ZERO(&rset);
+    FD_SET(fd, &rset);
+
+    while (select(fd + 1, &rset, NULL, NULL, &time) > 0) {
+        memset(resp, 0, sizeof(resp));
+        ssize_t len = read(fd, resp, sizeof(resp));
+        // PWL_LOG_DEBUG("[read] len: %ld", len);
+        if (len > 0) {
+            strcpy(response, resp);
+            break;
+        } 
+    }
+    int close_ret = close(fd);
+    return close_ret;
+}
+
+void *get_send_image_resp_thread_func() {
+    char fb_resp[MAX_COMMAND_LEN] = {0};
+    while (1) {
+        get_fastboot_resp(fb_resp);
+        if (strlen(fb_resp) > 0) {
+            PWL_LOG_DEBUG("Send image to fastboot result: %s", fb_resp);
+            if (strstr(fb_resp, "OKAY")) {
+                return (void *) RET_OK;
+            } else {
+                return (void *) RET_FAILED;
+            }
+        }
+    }
+    return (void *) RET_FAILED;
+}
+
+int flash_image(char *partition, char *image_file, char *checksum) {
+    PWL_LOG_DEBUG("\nFlash image: %s > %s", image_file, partition);
+
+    // Check partition and image file name
+    if (strlen(partition) <= 0) {
+        PWL_LOG_ERR("Partiton error, please check!");
+        return RET_FAILED;
+    }
+    if (strlen(image_file) <= 0) {
+        PWL_LOG_ERR("Image file name error, please check!");
+        return RET_FAILED;
+    }
+
+    PWL_LOG_DEBUG("\n[Req download]");
+    FILE *fp;
+    char file_size[9] = {0};
+    char fb_command[MAX_COMMAND_LEN] = {0};
+    char fb_resp[MAX_COMMAND_LEN] = {0};
+    char success_resp[MAX_COMMAND_LEN] = {0};
+    int ret = 0;
+
+    // Get image file size and convert to hex
+    fp = fopen(image_file, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("open file error");
+        return RET_FAILED;
+    }
+
+    if (fseek(fp, 0, SEEK_END) < 0) {
+        fclose(fp);
+        return RET_FAILED;
+    }
+    long size = ftell(fp);
+    fclose(fp);
+
+    sprintf(file_size, "%08x", (unsigned int)size);
+    sprintf(success_resp, "DATA%s", file_size);
+    if (DEBUG) PWL_LOG_DEBUG("file name: %s, size: 0x%s", image_file, file_size);
+
+    // Get downlaod command
+    sprintf(fb_command, "download:%s", file_size);
+    sleep(1);
+    ret = send_fastboot_command(fb_command, fb_resp);
+    PWL_LOG_DEBUG("ret: %d, fb_resp: %s", ret, fb_resp);
+
+    if (strcmp(fb_resp, success_resp) != 0) {
+        PWL_LOG_ERR("Req download failed!");
+        return RET_FAILED;
+    }
+
+    // Send image file to fastboot port
+    PWL_LOG_DEBUG("\n[Send image file to fastboot]");
+    memset(fb_resp, 0, sizeof(fb_resp));
+    memset(fb_command, 0, sizeof(fb_command));
+    sprintf(fb_command, "cat %s > %s", image_file, g_pcie_fastboot_port);
+
+    void *send_result = NULL;
+    pthread_t get_resp_thread;
+    pthread_create(&get_resp_thread, NULL, get_send_image_resp_thread_func, NULL);
+
+    sleep(1);
+    FILE *fp2;
+    fp2 = popen(fb_command, "w");
+    if (fp2 == NULL) {
+        PWL_LOG_ERR("Send image to fastboot error!");
+        return RET_FAILED;
+    }
+    pclose(fp2);
+    pthread_join(get_resp_thread, &send_result);
+
+    if (send_result != (void *) RET_OK) {
+        PWL_LOG_ERR("Send image failed, abort!");
+        if (send_result != NULL) {
+            send_result = NULL;
+            free(send_result);
+        }
+        return RET_FAILED;
+    }
+
+    // Flash to partition
+    PWL_LOG_DEBUG("\n[Flash image to parition]");
+
+    sleep(1);
+    memset(fb_command, 0, sizeof(fb_command));
+    memset(fb_resp, 0, sizeof(fb_resp));
+    memset(success_resp, 0, sizeof(success_resp));
+
+    sprintf(fb_command, "flash:%s", partition);
+    strcpy(success_resp, "OKAY");
+
+    send_fastboot_command(fb_command, fb_resp);
+
+    PWL_LOG_DEBUG("ret: %d, fb_rest: %s", ret, fb_resp);
+    if (strcmp(fb_resp, success_resp) != 0) {
+        PWL_LOG_ERR("Flash:[%s] to parition:[%s] failed!", image_file, partition);
+        if (strstr(fb_resp, "FAILpartition is not writable")) {
+            PWL_LOG_DEBUG("Ignore B partition flash error.");
+            return RET_OK;  // Remove later, just temporary.
+        } else {
+            return RET_FAILED;
+        }
+    }
+
+    // Check partition checksum
+    if (CHECK_CHECKSUM) {
+        PWL_LOG_DEBUG("\n[Check checksum of parition]");
+
+        sleep(1);
+        memset(fb_command, 0, sizeof(fb_command));
+        memset(fb_resp, 0, sizeof(fb_resp));
+        memset(success_resp, 0, sizeof(success_resp));
+
+        sprintf(fb_command, "check:%s", partition);
+        send_fastboot_command(fb_command, fb_resp);
+
+        PWL_LOG_DEBUG("[Notice] ret: %d, fb_rest: %s", ret, fb_resp);
+        if (!strstr(fb_resp, "OKAYCRC32:")) {
+            PWL_LOG_ERR("CRC response error, abort!");
+            return RET_FAILED;
+        } else {
+            char *p;
+            p = strtok(fb_resp, ":");
+
+            while (p != NULL) {
+                p = strtok(NULL, ":");
+                if (p != NULL) {
+                    if (strncmp(checksum, p, strlen(checksum)) != 0) {
+                        PWL_LOG_ERR("Image checksum [%s] not match to partition checksum [%s], abort!", checksum, p);
+                        // return RET_FAILED;
+                        // Temporary modify
+                        if (strcmp(partition, "preloader") == 0 ||
+                            strcmp(partition, "mcf3") == 0) {
+                            PWL_LOG_DEBUG("Ignore checksum for: preloader, mcf3");
+                            break;
+                        } else {
+                            return RET_FAILED;
+                        }
+                        // Temporary modify end
+                    } else {
+                        PWL_LOG_DEBUG("Checksum check pass!");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return RET_OK;
+}
+
+int switch_t7xx_mode(char *mode) {
+    // Find path of t7xx_mode
+    FILE *fp;
+    char *ret;
+    char temp_path[MAX_IMG_FILE_NAME_LEN] = {0};
+    char command[MAX_COMMAND_LEN] = {0};
+    int continue_success_count = 0;
+    if (strlen(g_t7xx_mode_node) <= 0) {
+        sprintf(command, "find /sys/ -name %s", T7XX_MODE);
+        fp = popen(command, "r");
+        if (fp == NULL) {
+            PWL_LOG_ERR("find t7xx_mode error!");
+            return RET_FAILED;
+        }
+        char buffer[MAX_IMG_FILE_NAME_LEN] = {0};
+        ret = fgets(buffer, sizeof(buffer), fp);
+        pclose(fp);
+
+        buffer[strcspn(buffer, "\n")] = 0;
+
+        if (strlen(buffer) <= 0)
+            return RET_FAILED;
+        strcpy(g_t7xx_mode_node, buffer);
+    }
+
+    if (DEBUG) PWL_LOG_DEBUG("T7xx node: %s", g_t7xx_mode_node);
+
+    // Find remove node of device
+    if (strlen(g_t7xx_mode_remove_node) <= 0) {
+        ret = strstr(g_t7xx_mode_node, T7XX_MODE);
+        int index = ret - g_t7xx_mode_node;
+
+        for (int i = 0; i < index; i++)
+            temp_path[i] = g_t7xx_mode_node[i];
+
+        strcpy(g_t7xx_mode_remove_node, temp_path);
+        strcat(g_t7xx_mode_remove_node, "remove");
+    }
+
+    if(DEBUG) PWL_LOG_DEBUG("T7xx remove node: %s", g_t7xx_mode_remove_node);
+
+    // Query t7xx_mode
+    char t7xx_mode[30] = {0};
+    memset(t7xx_mode, 0, sizeof(t7xx_mode));
+    query_t7xx_mode(t7xx_mode);
+    PWL_LOG_DEBUG("t7xx_mode state: %s", t7xx_mode);
+
+    if (strcmp(mode, MODE_FASTBOOT_SWITCHING) == 0) {
+        if (strcmp(t7xx_mode, "fastboot_download") == 0) {
+            PWL_LOG_DEBUG("Device already in fastboot_download mode, ignore.");
+            return RET_OK;
+        } else if (strcmp(t7xx_mode, "unknow") == 0) {
+            PWL_LOG_ERR("Device abnormal, abort switch");
+            return RET_FAILED;
+        }
+    }
+
+    // Set t7xx_mode to fastboot switching or reset
+    memset(command, 0, sizeof(command));
+    if (strcmp(mode, MODE_FASTBOOT_SWITCHING) == 0) {
+        sprintf(command, "echo \"%s\" > %s", MODE_FASTBOOT_SWITCHING, g_t7xx_mode_node);
+    } else if (strcmp(mode, MODE_HW_RESET) == 0) {
+        sprintf(command, "echo \"%s\" > %s", MODE_HW_RESET, g_t7xx_mode_node);
+    } else {
+        PWL_LOG_ERR("switch mode not define, abort!");
+        return RET_FAILED;
+    }
+
+    PWL_LOG_DEBUG("%s", command);
+
+    fp = popen(command, "w");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Set mode to t7xx_mode failed!");
+        return RET_FAILED;
+    }
+    pclose(fp);
+
+    for (int i = 1; i <= 5; i++) {
+        if (DEBUG) PWL_LOG_DEBUG("Sleep %d", i);
+        sleep(1);
+    }
+
+    memset(t7xx_mode, 0, sizeof(t7xx_mode));
+    query_t7xx_mode(t7xx_mode);
+    PWL_LOG_DEBUG("t7xx_mode state: %s", t7xx_mode);
+
+    // Remove device from pcie
+    PWL_LOG_DEBUG("\nRemove");
+    memset(command, 0, sizeof(command));
+    sprintf(command, "echo 1 > %s", g_t7xx_mode_remove_node);
+    PWL_LOG_DEBUG("%s", command);
+    fp = popen(command, "w");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Remove device failed");
+        return RET_FAILED;
+    }
+    pclose(fp);
+
+    for (int i = 1; i <= 5; i++) {
+        if (DEBUG) PWL_LOG_DEBUG("Sleep %d", i);
+        sleep(1);
+    }
+
+    // Rescan
+    PWL_LOG_DEBUG("\nRescan");
+    memset(command, 0, sizeof(command));
+    sprintf(command, "echo 1 > /sys/bus/pci/rescan");
+    fp = popen(command, "w");
+
+    if (fp == NULL) {
+        PWL_LOG_ERR("Rescan failed\n");
+        return RET_FAILED;
+    }
+    pclose(fp);
+
+    if (strcmp(mode, MODE_FASTBOOT_SWITCHING) == 0) {
+        for (int i = 1; i <= 20; i++) {
+            memset(t7xx_mode, 0, sizeof(t7xx_mode));
+            query_t7xx_mode(t7xx_mode);
+            PWL_LOG_DEBUG("count: %d, t7xx_mode: %s", i, t7xx_mode);
+            if (strcmp(t7xx_mode, "fastboot_download") == 0) {
+                break;
+            }
+            sleep(1);
+        }
+        // Sleep 10 secs to wait fastboot statble
+        PWL_LOG_DEBUG("\nSleep 10 secs to wait fastboot statble");
+        for (int i = 1; i <= 10; i++) {
+            if (DEBUG) PWL_LOG_DEBUG("Sleep %d", i);
+            sleep(1);
+        }
+
+        // Get device version to check fastboot state, need continue success 10 times
+        char resp[MAX_COMMAND_LEN] = {0};
+        for (int i = 0; i < GETVER_RETRY_LIMIT; i++) {
+            sleep(1);
+            memset(resp, 0, sizeof(resp));
+            send_fastboot_command("getvar:version", resp);
+            PWL_LOG_DEBUG("count: %d, resp: %s", i+1, resp);
+            if (strstr(resp, "OKAY")) {
+                continue_success_count++;
+                PWL_LOG_DEBUG("success count: %d", continue_success_count);
+                if (continue_success_count > FB_CMD_CONTINUE_SUCCESS_TH) {
+                    return RET_OK;
+                }
+            } else {
+                continue_success_count = 0;
+                continue;
+            }
+        }
+        return RET_FAILED;
+    } else {
+        for (int i = 1; i <= 60; i++) {
+            memset(t7xx_mode, 0, sizeof(t7xx_mode));
+            query_t7xx_mode(t7xx_mode);
+            PWL_LOG_DEBUG("count: %d, t7xx_mode: %s", i, t7xx_mode);
+            if (strcmp(t7xx_mode, "ready") == 0) {
+                break;
+            }
+            sleep(1);
+        }
+        return RET_OK;
+    }
+    return RET_FAILED;
+}
+
+int start_update_process_pcie(gboolean is_startup, int based_type) {
+    g_update_based_type = based_type;
+    if (0 != access(FW_UPDATE_STATUS_RECORD, F_OK)) {
+        fw_update_status_init();
+    }
+    FILE *fp;
+    int update_result = RET_FAILED;
+    char subsysid[10] = {0};
+    char sku_id[PWL_MAX_SKUID_SIZE] = {0};
+    char fw_package_ver[30] = {0};
+    g_need_update = false;
+    get_fwupdate_subsysid(subsysid);
+    pwl_get_skuid(sku_id, PWL_MAX_SKUID_SIZE);
+    if (DEBUG) PWL_LOG_DEBUG("subsys id: %s, sku id: %s", subsysid, sku_id);
+
+    if (based_type == PCIE_UPDATE_BASE_FLZ) {
+        if (get_current_fw_version() != RET_OK) {
+            PWL_LOG_ERR("Get current fw version error, abort!");
+            return RET_FAILED;
+        }
+    }
+
+    PWL_LOG_DEBUG("Current AP version: %s", g_current_fw_ver);
+    PWL_LOG_DEBUG("Current MD version: %s", g_current_md_ver);
+    PWL_LOG_DEBUG("Current OP version: %s", g_current_op_ver);
+    PWL_LOG_DEBUG("Current OEM version: %s", g_current_oem_ver);
+    PWL_LOG_DEBUG("Current DVP version: %s", g_current_dpv_ver);
+
+    // Init progress dialog
+    g_is_fw_update_processing = IN_FW_UPDATE_PROCESSING;
+    g_progress_percent = 0;
+    g_is_get_fw_ver = FALSE;
+    get_env_variable(env_variable, env_variable_length);
+
+    if (DEBUG) PWL_LOG_DEBUG("%s", set_env_variable);
+    strcpy(g_progress_status, "<span font='13'>Downloading ...\\n\\n</span><span foreground='red' font='16'>Do not shut down or restart</span>");
+    sprintf(g_progress_command,
+            "%szenity --progress --text=\"%s\" --percentage=%d --auto-close --no-cancel --width=600 --title=\"%s\"",
+            set_env_variable, g_progress_status, 1, "Modem Update");
+
+    if (g_progress_fp != NULL) {
+        pclose(g_progress_fp);
+        g_progress_fp = NULL;
+    }
+    if (!is_startup) g_progress_fp = popen(g_progress_command,"w");
+
+    // if (!is_startup) update_progress_dialog(2, "Start update process...", NULL);
+    PWL_LOG_INFO("Start update Process...");
+
+    switch (g_update_type) {
+        case UPDATE_TYPE_FULL:
+            find_fw_download_image(subsysid, fw_package_ver);
+            find_device_image(sku_id);
+            break;
+        case UPDATE_TYPE_ONLY_FW:
+            find_fw_download_image(subsysid, fw_package_ver);
+            break;
+        case UPDATE_TYPE_ONLY_DEV:
+            find_device_image(sku_id);
+            break;
+        default:
+            PWL_LOG_ERR("Update type unknow, abort!");
+            if (g_progress_fp != NULL) {
+                pclose(g_progress_fp);
+                g_progress_fp = NULL;
+            }
+            g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
+            return RET_FAILED;
+            break;
+    }
+
+    // if (!is_startup) update_progress_dialog(2, "Prepare update images...", NULL);
+
+    // Parse flash partiton in scatter.xml
+    if (generate_download_table(SCATTER_PATH) != RET_OK) {
+        PWL_LOG_ERR("Parse partition and image name failed, abort!");
+        close_progress_msg_box(CLOSE_TYPE_ERROR);
+        g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
+        return update_result;
+    }
+
+    // if (!is_startup) update_progress_dialog(2, "Checking update images...", NULL);
+    // Check if all image can find in scatter.xml
+    if (check_image_downlaod_table() != RET_OK) {
+        if (g_need_update) {
+            PWL_LOG_ERR("Check flash table failed, abort!");
+            if (!is_startup) close_progress_msg_box(CLOSE_TYPE_ERROR);
+        } else {
+            PWL_LOG_ERR("Didn't need to update, abort!");
+            remove_flash_data(g_update_type);
+            if (!is_startup) close_progress_msg_box(CLOSE_TYPE_SKIP);
+        }
+
+        g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
+        return update_result;
+    }
+
+    if (is_startup) g_progress_fp = popen(g_progress_command, "w");
+
+    // Switch to download mode
+    update_progress_dialog(3, "Switch to download mode...", NULL);
+    if (switch_t7xx_mode(MODE_FASTBOOT_SWITCHING) != RET_OK) {
+        PWL_LOG_ERR("Switch to fastboot mode error!");
+        goto DO_RESET;
+    }
+
+    // Flash images base on download table
+    update_progress_dialog(3, "Start download...", NULL);
+    if (parse_download_table_and_flash() != RET_OK) {
+        PWL_LOG_ERR("Download image error");
+        goto DO_RESET;
+    }
+    update_result = RET_OK;
+
+DO_RESET:
+    PWL_LOG_DEBUG("[Notice] DO RESET, update_result: %d", update_result);
+
+    update_progress_dialog(20, "Preparing reset...", NULL);
+    /*
+    int wait_count = 0;
+    char t7xx_mode[MAX_COMMAND_LEN] = {0};
+    memset(t7xx_mode, 0, sizeof(t7xx_mode));
+    query_t7xx_mode(t7xx_mode);
+
+    // Wait for module leave fastboot_download mode.
+    PWL_LOG_INFO("Waiting for module leave fastboot_download mode.");
+    while(!strstr(t7xx_mode, "unknow")) {
+        wait_count++;
+        if (wait_count > 20)
+            break;
+        memset(t7xx_mode, 0, sizeof(t7xx_mode));
+        query_t7xx_mode(t7xx_mode);
+        if (!strstr(t7xx_mode, "unknow")) {
+            sleep(5);
+        } else {
+            PWL_LOG_DEBUG("Leave waiting!");
+            break;
+        }
+    }
+
+    // sleep(5);
+    switch_t7xx_mode(MODE_HW_RESET);
+    */
+    if (do_fastboot_reboot() != RET_OK) {
+        switch_t7xx_mode(MODE_HW_RESET);
+    }
+    update_progress_dialog(50, "Finish download...", NULL);
+    g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
+    if (update_result == RET_FAILED) {
+        set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
+        g_fw_update_retry_count++;
+        return RET_FAILED;
+    } else {
+        // Wait 5 sec to wait mbim port
+        sleep(5);
+        gchar port[20];
+        memset(port, 0, sizeof(port));
+        if (pwl_find_mbim_port(port, sizeof(port))) {
+            // Download process pass and find mbim port suceess
+            set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, 0);
+            g_fw_update_retry_count = 0;
+            return RET_OK;
+        } else {
+            // Download process pass, but can't find mbim port.
+            set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
+            g_fw_update_retry_count++;
+            return RET_FAILED;
+        }
+    }
+
+    return RET_FAILED;
+}
+
+int do_fastboot_reboot() {
+    FILE *fp;
+    char fb_command[MAX_COMMAND_LEN] = {0};
+    char fb_resp[MAX_COMMAND_LEN] = {0};
+    char t7xx_mode[30] = {0};
+    int ret = 0;
+
+    strcpy(fb_command, "reboot");
+    ret = send_fastboot_command(fb_command, fb_resp);
+    PWL_LOG_DEBUG("ret: %d, fb_resp: %s", ret, fb_resp);
+
+    if (strcmp(fb_resp, "OKAY") == 0) {
+        PWL_LOG_DEBUG("Wait 5 secs then check module status.");
+        sleep(5);
+        for (int i = 0; i < 60; i++) {
+            sleep(1);
+            memset(t7xx_mode, 0, sizeof(t7xx_mode));
+            query_t7xx_mode(t7xx_mode);
+            if (DEBUG) PWL_LOG_DEBUG("query count: %d, t7xx_mode: %s", i, t7xx_mode);
+
+            if (strcmp(t7xx_mode, "ready") == 0) {
+                if (DEBUG) PWL_LOG_DEBUG("Module ready");
+                return RET_OK;
+            }
+        }
+    }
+    return RET_FAILED;
+}
+
+int check_update_data(int check_type) {
+    int update_type = 0;
+    // Check which type udpate
+    if (check_type == TYPE_FLASH_FLZ) {
+        if (access(UPDATE_FW_FLZ_FILE, F_OK) == 0 &&
+            access(UPDATE_DEV_FLZ_FILE, F_OK) == 0) {
+            update_type = UPDATE_TYPE_FULL;
+        } else if (access(UPDATE_FW_FLZ_FILE, F_OK) == 0 &&
+                   access(UPDATE_DEV_FLZ_FILE, F_OK) != 0) {
+            update_type = UPDATE_TYPE_ONLY_FW;
+        } else if (access(UPDATE_FW_FLZ_FILE, F_OK) != 0 &&
+                   access(UPDATE_DEV_FLZ_FILE, F_OK) == 0) {
+            update_type = UPDATE_TYPE_ONLY_DEV;
+        } else {
+            return RET_FAILED;
+        }
+    } else if (check_type == TYPE_FLASH_FOLDER) {
+        if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 &&
+            access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
+            update_type = UPDATE_TYPE_FULL;
+        } else if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 &&
+                   access(UPDATE_DEV_FOLDER_FILE, F_OK) != 0) {
+            update_type = UPDATE_TYPE_ONLY_FW;
+        } else if (access(UPDATE_FW_FOLDER_FILE, F_OK) != 0 &&
+                   access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
+            update_type = UPDATE_TYPE_ONLY_DEV;
+        } else {
+            return RET_FAILED;
+        }
+    } else {
+        PWL_LOG_ERR("Check type abnormal, abort");
+        return RET_FAILED;
+    }
+
+    g_update_type = update_type;
+
+    // Unzip flz
+    if (check_type == TYPE_FLASH_FLZ) {
+        switch (update_type) {
+            case UPDATE_TYPE_FULL:
+                if (unzip_flz(UPDATE_FW_FLZ_FILE, UNZIP_FOLDER_FW) != RET_OK) {
+                    PWL_LOG_ERR("Unzip FwPackage flz failed, abort!");
+                    return RET_FAILED;
+                }
+                if (unzip_flz(UPDATE_DEV_FLZ_FILE, UNZIP_FOLDER_DVP) != RET_OK) {
+                    PWL_LOG_ERR("Unzip DevPackage flz failed, abort!");
+                    return RET_FAILED;
+                }
+                break;
+            case UPDATE_TYPE_ONLY_FW:
+                if (unzip_flz(UPDATE_FW_FLZ_FILE, UNZIP_FOLDER_FW) != RET_OK) {
+                    PWL_LOG_ERR("Unzip FwPackage flz failed, abort!");
+                    return RET_FAILED;
+                }
+                break;
+            case UPDATE_TYPE_ONLY_DEV:
+                if (unzip_flz(UPDATE_DEV_FLZ_FILE, UNZIP_FOLDER_DVP) != RET_OK) {
+                    PWL_LOG_ERR("Unzip DevPackage flz failed, abort!");
+                    return RET_FAILED;
+                }
+                break;
+            default:
+                return RET_FAILED;
+                break;
+        }
+    }
+
+    return RET_OK;
+}
+
+int parse_checksum(char *checksum_file, char *key_image, char *checksum_value) {
+    xmlDoc *doc;
+    xmlChar *xpath_file = (xmlChar*) "//file";
+    xmlXPathObjectPtr xpath_file_obj;
+    xmlNodeSetPtr nodeset_file = NULL;
+    xmlNode *temp_node = NULL;
+    bool ret = RET_FAILED;
+    doc = xmlReadFile(checksum_file, NULL, 0);
+    if (doc == NULL) {
+        PWL_LOG_ERR("parse_checksum read xml failed!\n");
+        return ret;
+    }
+
+    xpath_file_obj = get_node_set(doc, xpath_file);
+    nodeset_file = xpath_file_obj->nodesetval;
+
+    for (temp_node = nodeset_file->nodeTab[0]; temp_node; temp_node = temp_node->next) {
+        if (temp_node->type == XML_ELEMENT_NODE) {
+            if (strstr(key_image, xmlGetProp(temp_node, "name"))) {
+                if (strlen(xmlGetProp(temp_node, "checksum")) > 0) {
+                    strcpy(checksum_value, xmlGetProp(temp_node, "checksum"));
+                    ret = RET_OK;
+                } else {
+                    PWL_LOG_ERR("%s checksum value is empty!", key_image);
+                    ret = RET_FAILED;
+                }
+            }
+        }
+    }
+    xmlXPathFreeObject(xpath_file_obj);
+    xmlFreeDoc(doc);
+    return ret;
+}
+
 gint main( int Argc, char **Argv )
 {
     PWL_LOG_INFO("start");
 
-    pwl_device_type_t type = pwl_get_device_type_await();
-    if (type == PWL_DEVICE_TYPE_UNKNOWN) {
+    g_device_type = pwl_get_device_type_await();
+    if (g_device_type == PWL_DEVICE_TYPE_UNKNOWN) {
         PWL_LOG_INFO("Unsupported device.");
-        return 0;
-    }
-
-    if (type == PWL_DEVICE_TYPE_PCIE) {
-        PWL_LOG_INFO("Unsupported fw upgrade device.");
         return 0;
     }
 
@@ -2652,9 +4263,10 @@ gint main( int Argc, char **Argv )
     if (ENABLE_INSTALLED_FASTBOOT_CHECK)
         g_fb_installed = check_fastboot();
 
-    //signal_callback_t signal_callback;
-    //signal_callback.callback_retry_fw_update = signal_callback_retry_fw_update;
-    //registerSignalCallback(&signal_callback);
+    signal_callback_t signal_callback;
+    // signal_callback.callback_retry_fw_update = signal_callback_retry_fw_update;
+    signal_callback.callback_notice_module_recovery_finish = signal_callback_notice_module_recovery_finish;
+    registerSignalCallback(&signal_callback);
 
     gdbus_init();
     while(!dbus_service_is_ready());
@@ -2680,31 +4292,38 @@ gint main( int Argc, char **Argv )
     if (get_current_fw_version() != 0)
     {
         PWL_LOG_ERR("Get current FW version error!");
-        // return -1;
+        if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+            PWL_LOG_DEBUG("Request pwl_pref to update fw version!");
+            pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
+        }
         goto PREPARE_ERROR;
     }
 
     // Check if UPDATE_FW_ZIP_FILE exist
-    if (access(UPDATE_FW_ZIP_FILE, F_OK) != 0)
-    {
-        PWL_LOG_DEBUG("Update fw zip not exist, abort!");
-        goto PREPARE_ERROR;
-    }
-    else
-    {
-        if (extract_update_files() == 0)
-        {
-            PWL_LOG_DEBUG("Start update process");
-            if (start_update_process(TRUE) != 0)
-            {
+    if (g_device_type == PWL_DEVICE_TYPE_USB) {
+        if (access(UPDATE_FW_ZIP_FILE, F_OK) != 0) {
+            PWL_LOG_DEBUG("Update fw zip not exist, abort!");
+            goto PREPARE_ERROR;
+        } else {
+            if (extract_update_files() == 0) {
+                PWL_LOG_DEBUG("Start update process");
+                if (start_update_process(TRUE) != 0) {
+                    goto PREPARE_ERROR;
+                }
+            } else {
+                PWL_LOG_ERR("Extra update files error, abort!");
                 goto PREPARE_ERROR;
             }
         }
-        else
-        {
-            PWL_LOG_ERR("Extra update files error, abort!");
-            goto PREPARE_ERROR;
+    } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        // Init fw update status file
+        if (fw_update_status_init() == 0) {
+            get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &g_fw_update_retry_count);
+            get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &g_need_retry_fw_update);
         }
+        PWL_LOG_DEBUG("PCIE device, wait pwl_core module recovery check finish.");
+    } else {
+        goto PREPARE_ERROR;
     }
 
 PREPARE_ERROR:
