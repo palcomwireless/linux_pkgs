@@ -22,6 +22,7 @@
 #include "log.h"
 
 static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
+static char *g_subsysid;
 
 char *usb_devices[] = { "0CBD", "0CC2", "0CC1", "0CC4", "0CB5",
                         "0CB6", "0CB7", "0CB8", "0CB2", "0CB3",
@@ -146,6 +147,43 @@ void pwl_get_skuid(gchar *buff, gint buff_len) {
     }
 }
 
+int get_fwupdate_subsysid(char *subsysid) {
+    if (g_subsysid == NULL) {
+        PWL_LOG_ERR("SUBSYS error");
+        return RET_FAILED;
+    }
+    char *token;
+    char vid[5] = {0};
+    char pid[5] = {0};
+    char id_buffer[20] = {0};
+    strcpy(id_buffer, g_subsysid);
+    if (DEBUG) PWL_LOG_DEBUG("[Notice] id_buffer: %s", id_buffer);
+
+    token = strtok(id_buffer, ":");
+    if (token == NULL) {
+        if (DEBUG) PWL_LOG_ERR("[Notice] Split token is NULL, id_buffer: %s", id_buffer);
+        strcpy(subsysid, "default");
+        return RET_OK;
+    }
+    if (strlen(token) > 0) 
+        strncpy(vid, token, 4);
+    if (DEBUG) PWL_LOG_DEBUG("[Notice] id_buffer: %s, vid: %s", id_buffer, vid);
+    while(token != NULL) {
+        token = strtok(NULL, ":");
+        if (token != NULL) {
+            if (strlen(token) > 0) {
+                strncpy(pid, token, 4);
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    if (DEBUG) PWL_LOG_DEBUG("[Notice] id_buffer: %s, pid: %s", id_buffer, pid);
+    sprintf(subsysid, "%s%s", pid, vid);
+    return RET_OK;
+}
+
 gboolean pwl_module_device_id_exist(pwl_device_type_t type, gchar *id) {
 
     gchar *command = NULL;
@@ -198,7 +236,14 @@ gboolean pwl_module_device_id_exist(pwl_device_type_t type, gchar *id) {
             if (strlen(subsysid) > 0) {
                 char* subsys = strstr(subsysid, (char *)"PCI_SUBSYS_ID=");
                 id = subsys + strlen((char *)"PCI_SUBSYS_ID=");
+                if (DEBUG) PWL_LOG_DEBUG("[Notice] id: %s", id);
                 if (strncmp(id, SUBSYS, strlen(SUBSYS)) == 0) {
+                    if (g_subsysid == NULL) {
+                        g_subsysid = malloc(20);
+                        memset(g_subsysid, 0, 20);
+                        strcpy(g_subsysid, id);
+                        if (DEBUG) PWL_LOG_DEBUG("[Notice] g_subsysid: %s", g_subsysid);
+                    }
                     return TRUE;
                 }
             }
@@ -693,4 +738,22 @@ int count_int_length(unsigned x) {
     if (x >= 100)        return 3;
     if (x >= 10)         return 2;
     return 1;
+}
+
+int remove_folder(char *path) {
+    FILE *fp;
+    char *ret;
+    char command[128] = {0};
+    sprintf(command, "rm -rf %s", path);
+
+    PWL_LOG_DEBUG("Remove %s", path);
+    fp = popen(command, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Remove folder error!");
+        return RET_FAILED;
+    }
+    char buffer[MAX_FW_PACKAGE_PATH_LEN] = {0};
+    ret = fgets(buffer, sizeof(buffer), fp);
+    pclose(fp);
+    return RET_OK;
 }
