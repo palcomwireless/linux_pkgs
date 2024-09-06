@@ -44,6 +44,7 @@ int g_need_retry_fw_update;
 // For PCI hw reset
 mbim_device_ready_callback g_ready_cb;
 pthread_mutex_t g_device_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t g_device_cond = PTHREAD_COND_INITIALIZER;
 int g_mode = 0;
 int g_rescan_failure_count = 0;
 gboolean g_device_cap_check_pass = FALSE;
@@ -69,7 +70,7 @@ int do_shell_cmd(char *cmd, char *response) {
 int get_full_path(char *full_path) {
     char command[SHELL_CMD_RSP_LENGTH];
     char rsp[SHELL_CMD_RSP_LENGTH];
-    memset(rsp, 0, SHELL_CMD_RSP_LENGTH);
+    memset(rsp, 0, sizeof(rsp));
     sprintf(command, "find /sys/ -name %s", DEVICE_MODE_NAME);
     do_shell_cmd(command, rsp);
     if (strlen(rsp) > 0) {
@@ -81,8 +82,8 @@ int get_full_path(char *full_path) {
 }
 int get_device_node_path(char *full_path, char *device_node_path) {
     int full_patch_size = strlen(full_path);
-    char temp[full_patch_size];
-    memset(temp, 0, strlen(full_path));
+    char temp[full_patch_size + 1];
+    memset(temp, 0, sizeof(temp));
     strcpy(temp, full_path);
     char *token = strtok(temp, "/");
     while (token != NULL) {
@@ -136,7 +137,7 @@ int set_device_mode(char *device_node_path, char *node, char *value) {
 int do_pci_hw_reset(int reset_mode) {
     //full_path
     char full_path[SHELL_CMD_RSP_LENGTH];
-    memset(full_path, 0, SHELL_CMD_RSP_LENGTH);
+    memset(full_path, 0, sizeof(full_path));
     if (get_full_path(full_path) == RET_OK)
         PWL_LOG_DEBUG("Full path: %s", full_path);
     else {
@@ -146,7 +147,7 @@ int do_pci_hw_reset(int reset_mode) {
 
     //device node path
     char device_node_path[SHELL_CMD_RSP_LENGTH];
-    memset(device_node_path, 0, strlen(full_path));
+    memset(device_node_path, 0, sizeof(device_node_path));
     if (get_device_node_path(full_path, device_node_path) == RET_OK) {
         PWL_LOG_DEBUG("Device node: %s", device_node_path);
     } else {
@@ -156,7 +157,7 @@ int do_pci_hw_reset(int reset_mode) {
 
     // Get device mode
     char device_mode[DEVICE_MODE_LENGTH];
-    memset(device_mode, 0, DEVICE_MODE_LENGTH);
+    memset(device_mode, 0, sizeof(device_mode));
     if (get_device_mode(device_node_path, device_mode) == RET_OK) {
         PWL_LOG_DEBUG("Device mode: %s", device_mode);
     } else {
@@ -172,7 +173,7 @@ int do_pci_hw_reset(int reset_mode) {
             if (DEBUG) PWL_LOG_DEBUG("Sleep %i", i);
             sleep(1);
         }
-        memset(device_mode, 0, DEVICE_MODE_LENGTH);
+        memset(device_mode, 0, sizeof(device_mode));
         if (get_device_mode(device_node_path, device_mode) == RET_OK) {
             PWL_LOG_DEBUG("Device mode: %s", device_mode);
         } else {
@@ -200,7 +201,7 @@ int do_pci_hw_reset(int reset_mode) {
     }
     PWL_LOG_INFO("Rescan done");
 
-    memset(device_mode, 0, DEVICE_MODE_LENGTH);
+    memset(device_mode, 0, sizeof(device_mode));
     if (get_device_mode(device_node_path, device_mode) == RET_OK) {
         PWL_LOG_DEBUG("Device mode: %s", device_mode);
     } else {
@@ -217,7 +218,7 @@ static void pci_mbim_device_close_cb(MbimDevice *dev, GAsyncResult *res) {
     if (!mbim_device_close_finish(dev, res, &error))
         g_error_free(error);
 
-    pthread_mutex_unlock(&g_device_mutex);
+    pthread_cond_signal(&g_device_cond);
 }
 
 static void pci_device_close() {
@@ -231,7 +232,7 @@ static void pci_device_close() {
 
 static void pci_device_open_cb(MbimDevice *dev, GAsyncResult *res) {
     PWL_LOG_INFO("MBIM Device open");
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
     if (!mbim_device_open_finish(dev, res, &error)) {
         PWL_LOG_ERR("Couldn't open Mbim Device: %s\n", error->message);
@@ -250,7 +251,7 @@ static void pci_device_new_cb(GObject *unused, GAsyncResult *res) {
     // pthread_mutex_unlock(&g_device_mutex);
     PWL_LOG_DEBUG("== MBIM Device ready ==");
 
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
     g_pci_device = mbim_device_new_finish(res, &error);
     if (!g_pci_device) {
@@ -315,7 +316,7 @@ gboolean find_abnormal_port(gchar *port_buff_ptr, guint32 port_buff_size) {
         return RET_FAILED;
 
     strncpy(port_buff_ptr, buffer, strlen(buffer));
-    PWL_LOG_DEBUG("Find abnormal port: %s", port_buff_ptr);
+    PWL_LOG_DEBUG("Found abnormal port: %s", port_buff_ptr);
     return RET_OK;
 }
 
@@ -327,7 +328,7 @@ gboolean pci_mbim_device_init(mbim_device_ready_callback cb) {
     gchar port [20];
     memset(port, 0, sizeof(port));
     //Check if mbim port exist
-    if (!find_mbim_port(port, sizeof(port))) {
+    if (RET_FAILED == find_mbim_port(port, sizeof(port))) {
         PWL_LOG_ERR("Find mbim port fail!");
         return RET_FAILED;
     }
@@ -346,9 +347,11 @@ gboolean pci_mbim_device_init(mbim_device_ready_callback cb) {
 void pci_mbim_device_deinit(void) {
     PWL_LOG_ERR("MBIM Device deinit");
 
-    pthread_mutex_lock(&g_device_mutex);
-
     pci_device_close();
+    if (!cond_wait(&g_device_mutex, &g_device_cond, PWL_CLOSE_MBIM_TIMEOUT_SEC)) {
+        if (DEBUG) PWL_LOG_ERR("timed out or error during mbim deinit");
+    }
+
     if (g_pci_cancellable)
         g_object_unref(g_pci_cancellable);
     if (g_pci_device)
@@ -409,7 +412,7 @@ int check_module_info_v2() {
     int check_result;
     g_mode = MODE_DEVICE_CAP;
     g_device_cap_check_pass = FALSE;
-    if (!pci_mbim_device_init(pci_mbim_device_ready_cb)) {
+    if (RET_FAILED == pci_mbim_device_init(pci_mbim_device_ready_cb)) {
         PWL_LOG_ERR("Module cap info check fail!");
         pci_mbim_device_deinit();
         return RET_FAILED;
@@ -445,6 +448,15 @@ static gboolean madpt_ready_method(pwlCore     *object,
                            GDBusMethodInvocation *invocation) {
 
     PWL_LOG_DEBUG("Madpt ready, send signal to get FW version!");
+    pwl_core_emit_get_fw_version_signal(gp_skeleton);
+    return TRUE;
+
+}
+
+static gboolean request_update_fw_version(pwlCore     *object,
+                           GDBusMethodInvocation *invocation) {
+
+    PWL_LOG_DEBUG("Received request, send signal to get FW version!");
     pwl_core_emit_get_fw_version_signal(gp_skeleton);
     return TRUE;
 
@@ -655,13 +667,14 @@ int gpio_init()
 static void bus_acquired_hdl(GDBusConnection *connection,
                              const gchar     *bus_name,
                              gpointer         user_data) {
-    GError *pError = NULL;
+    g_autoptr(GError) pError = NULL;
 
     /** Second step: Try to get a connection to the given bus. */
     gp_skeleton = pwl_core_skeleton_new();
 
     /** Third step: Attach to dbus signals. */
     (void) g_signal_connect(gp_skeleton, "handle-madpt-ready-method", G_CALLBACK(madpt_ready_method), NULL);
+    (void) g_signal_connect(gp_skeleton, "handle-request-update-fw-version-method", G_CALLBACK(request_update_fw_version), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-ready-to-fcc-unlock-method", G_CALLBACK(ready_to_fcc_unlock_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-gpio-reset-method", G_CALLBACK(gpio_reset_method), NULL);
     //(void) g_signal_connect(gp_skeleton, "handle-request-retry-fw-update-method", G_CALLBACK(request_retry_fw_update_method), NULL);
@@ -673,7 +686,6 @@ static void bus_acquired_hdl(GDBusConnection *connection,
                                             &pError);
     if(pError != NULL) {
         PWL_LOG_ERR("Failed to export object. Reason: %s.", pError->message);
-        g_error_free(pError);
         g_main_loop_quit(gp_loop);
         return;
     }
@@ -886,7 +898,7 @@ static void mbim_indication_cb(MbimDevice *self, MbimMessage *message) {
 }
 
 static void device_open_cb(MbimDevice *dev, GAsyncResult *res) {
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
     if (!mbim_device_open_finish(dev, res, &error)) {
         PWL_LOG_ERR("Couldn't open Mbim Device: %s\n", error->message);
@@ -910,7 +922,7 @@ static void device_open_cb(MbimDevice *dev, GAsyncResult *res) {
 
 
 static void device_new_cb(GObject *unused, GAsyncResult *res) {
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
     g_device = mbim_device_new_finish(res, &error);
     if (!g_device) {
@@ -968,6 +980,12 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
                 g_bootup_failure_count = 0;
                 set_bootup_status_value(BOOTUP_FAILURE_COUNT, g_bootup_failure_count);
                 PWL_LOG_DEBUG("Check module pass!");
+                PWL_LOG_DEBUG("Notify fwupdate start extract flz and check if update");
+
+                // Notice pref to update fw version
+                PWL_LOG_INFO("Notify pref to update fw version");
+                pwl_core_emit_get_fw_version_signal(gp_skeleton);
+                pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLZ);
                 break;
             }
         }
@@ -979,8 +997,18 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
             set_bootup_status_value(BOOTUP_FAILURE_COUNT, g_bootup_failure_count);
             if (g_bootup_failure_count <= g_bootup_failure_limit) {
                 // Bootup Failure < Max failure, do hw reset
-                PWL_LOG_DEBUG("Do HW reset");
-                do_pci_hw_reset(DEVICE_HW_RESET);
+                PWL_LOG_DEBUG("Do flash recovery check");
+
+                // Check if flash data folder exist
+                if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 ||
+                    access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
+                    // Notice pref to update fw version
+                    PWL_LOG_INFO("Notify pref to update fw version");
+                    pwl_core_emit_get_fw_version_signal(gp_skeleton);
+                    pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLASH_FOLDER);
+                } else {
+                    PWL_LOG_DEBUG("Flash data folder not exist, in to idle");
+                }
                 break;
             } else {
                 // Bootup Failure >= Max failure, into idle
@@ -990,17 +1018,28 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
         } else {
             // Can't found mbim and abnormal port, do re-scan
             g_rescan_failure_count++;
+            PWL_LOG_DEBUG("Rescan failure count: %d", g_rescan_failure_count);
             if (g_rescan_failure_count <= MAX_RESCAN_FAILURE) {
                 PWL_LOG_DEBUG("Do re-scan");
                 do_pci_hw_reset(DEVICE_HW_RESCAN);
             } else {
                 // Rescan failure >= Max Failure, do hw reset
-                PWL_LOG_DEBUG("Rescan count reach max limit, do HW reset");
-                do_pci_hw_reset(DEVICE_HW_RESET);
+                PWL_LOG_DEBUG("Rescan count reach max limit, do flash recovery check.");
+                // Check if flash data folder exist
+                if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 ||
+                    access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
+                    // Notice pref to update fw version
+                    PWL_LOG_INFO("Notify pref to update fw version");
+                    pwl_core_emit_get_fw_version_signal(gp_skeleton);
+                    pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLASH_FOLDER);
+                } else {
+                    PWL_LOG_DEBUG("Flash data folder not exist, in to idle");
+                }
                 break;
             }
         }
     }
+
     return ((void*)0);
 }
 
@@ -1053,6 +1092,7 @@ gint main() {
 
     g_main_loop_run(gp_loop);
 
+    pci_mbim_device_deinit();
     if (g_cancellable)
         g_object_unref(g_cancellable);
     if (g_device)

@@ -40,8 +40,6 @@
 
 #define DEVICE_REMOVE_DELAY         5   //Delay before remove device
 #define DEVICE_RESCAN_DELAY         5   //Delay before rescan device
-#define MAX_BOOTUP_FAILURE          3
-#define MAX_RESCAN_FAILURE          3
 #define TIMEOUT_SEC                 10
 
 typedef struct {
