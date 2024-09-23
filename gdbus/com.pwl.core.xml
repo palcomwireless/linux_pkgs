@@ -48,5 +48,8 @@
 
     <method name="RequestRetryFwUpdateMethod">
     </method>
+
+    <method name="RequestFwUpdateCheckMethod">
+    </method>
   </interface>
 </node>
