@@ -96,9 +96,14 @@ gboolean send_at_cmd(const char *port, const char *command, gchar **response) {
 
         ssize_t len = read(fd, buffer, sizeof(resp));
         if (len > 0) {
-            memcpy(resp + resp_len, buffer, len);
-            resp_len += len;
-            if (DEBUG) PWL_LOG_DEBUG("response read(%ld): %s", len, resp);
+            if (resp_len < PWL_MQ_MAX_RESP) {
+                ssize_t copy_len = (((resp_len + len) > PWL_MQ_MAX_RESP) ? (PWL_MQ_MAX_RESP - resp_len) : len);
+                memcpy(resp + resp_len, buffer, copy_len);
+                resp_len += copy_len;
+                if (DEBUG) PWL_LOG_DEBUG("response read(%ld): %s", len, resp);
+            } else {
+                if (DEBUG) PWL_LOG_DEBUG("long response, skip the rest of the responses");
+            }
         } else {
             PWL_LOG_ERR("resp read line resp_len %ld", len);
             break;

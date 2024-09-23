@@ -52,9 +52,11 @@ gchar* at_cmd_map[] = {
     "at*bjpfccautoreboot=1",
     "at*boemprireset?",
     "at+productinfo=1",
+    "at*capversion?",
     "at*copid?",
     "at*coemid?",
-    "at*cdpvid?"
+    "at*cdpvid?",
+    "at+esbp?"
 };
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -99,6 +101,9 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
     if (end == NULL)
     {
         end = strstr(rsp, "OK");
+        if (end == NULL && (strlen(rsp) == PWL_MQ_MAX_RESP)) {
+            end = start + PWL_MQ_MAX_RESP;
+        }
         if (strstr(rsp, "ERROR") != NULL) {
             return FALSE;
         }
@@ -140,8 +145,13 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
         }
         return TRUE;
     } else {
-        PWL_LOG_ERR("Response buffer size not large enough");
-        return FALSE;
+        // PWL_LOG_ERR("Response buffer size not large enough");
+        // return FALSE;
+        PWL_LOG_DEBUG("[Warning] Response buffer size not enough, message could be incomplete.");
+        memset(buff_ptr, '\0', buff_size);
+        strncpy(buff_ptr, start, buff_size - 1);
+        if (DEBUG) PWL_LOG_DEBUG("%s", buff_ptr);
+        return TRUE;
     }
 }
 
@@ -433,6 +443,9 @@ static gpointer msg_queue_thread_func(gpointer data) {
             case PWL_CID_GET_PCIE_DEVICE_VERSION:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
+            case PWL_CID_GET_PCIE_AP_VERSION:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
             case PWL_CID_SWITCH_TO_FASTBOOT:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, "Switch to fastboot cmd done");
                 break;
@@ -465,6 +478,34 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 break;
             case PWL_CID_GET_PCIE_DPV_VERSION:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_GET_CARRIER_ID:
+                if (strlen(g_response) > 0) {
+                    if (strstr(g_response, "ESBP")) {
+                        PWL_LOG_DEBUG("Parse carrier id fom SBP.");
+                        char *id;
+                        int index = 0;
+                        id = strtok(g_response, ",");
+                        if (id != NULL) {
+                            while (id != NULL) {
+                                index++;
+                                id = strtok(NULL, ",");
+                                if (index == 1)
+                                    break;
+                            }
+                            send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, id);
+                        } else {
+                            PWL_LOG_ERR("SPB response format not correct, can't parse carrier id");
+                            send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, "");
+                        }
+                    } else {
+                        PWL_LOG_ERR("SPB response format not correct, can't parse carrier id");
+                        send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, "");
+                    }
+                } else {
+                    PWL_LOG_ERR("Can't get sim SPB id, clear carrier id.");
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, "");
+                }
                 break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
