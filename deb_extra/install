@@ -42,6 +42,10 @@ function copy_files_to_release()
     # copy udev for mm at port ignore
     mkdir -p ${dpkg_dir}/usr/lib/udev/rules.d/
     cp -raf ${root_dir}/deb_extra/76-pwl.mm-port.rules ${dpkg_dir}/usr/lib/udev/rules.d/
+
+    # copy conf file for enable --test-quick-suspend-resume feature flag in ModemManager
+    mkdir -p ${dpkg_dir}/etc/systemd/system/ModemManager.service.d/
+    cp -raf ${root_dir}/deb_extra/pwl-test-quick-suspend-resume.conf ${dpkg_dir}/etc/systemd/system/ModemManager.service.d/
 }
 
 function create_release()

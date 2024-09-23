@@ -7,6 +7,10 @@ echo "pwl utility removal completed"
 case "$1" in
     purge|remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         systemctl daemon-reload
+
+        # Restart ModemManager after override conf removed
+        systemctl restart ModemManager.service
+        systemctl daemon-reload
         ;;
     *)
         echo "postrm called with unknown argument \`$1'" >&2

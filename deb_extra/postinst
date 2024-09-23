@@ -23,6 +23,11 @@ case "$1" in
             chown -R root:root ${mmpath}fcc-unlock.d
             chmod 755 -R ${mmpath}fcc-unlock.d
         fi
+
+        # Restart ModemManager after override conf added
+        if [ -e /etc/systemd/system/ModemManager.service.d/pwl-test-quick-suspend-resume.conf ]; then
+            systemctl restart ModemManager.service
+        fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)
         ;;
