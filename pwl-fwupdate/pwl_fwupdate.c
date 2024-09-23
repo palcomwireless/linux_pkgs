@@ -85,6 +85,7 @@ char *g_oem_sku_id;
 char g_device_package_ver[DEVICE_PACKAGE_VERSION_LENGTH];
 char g_current_fw_ver[FW_VERSION_LENGTH] = {0};
 char g_oem_pri_ver[OEM_PRI_VERSION_LENGTH];
+char g_carrier_id[10] = {0};
 gboolean gb_del_tune_code_ret = FALSE;
 gboolean gb_set_oem_pri_ver_ret = FALSE;
 gboolean gb_set_pref_carrier_ret = FALSE;
@@ -710,6 +711,16 @@ void* msg_queue_thread_func() {
                     g_retry_fw_update = TRUE;
                 }
                 break;
+            case PWL_CID_GET_CARRIER_ID:
+                if (strlen(message.response) > 0 && (strlen(message.response) < sizeof(g_carrier_id))) {
+                    PWL_LOG_DEBUG("Carrier ID: %s", message.response);
+                    strcpy(g_carrier_id, message.response);
+                } else {
+                    PWL_LOG_ERR("Carrier id abnormal, clear g_carrier_id");
+                    memset(g_carrier_id, 0, sizeof(g_carrier_id));
+                }
+                pthread_cond_signal(&g_cond);
+                break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
                 break;
@@ -1232,6 +1243,12 @@ void close_progress_msg_box(int close_type) {
         case CLOSE_TYPE_SKIP:
             sprintf(close_message, "%s", "#Modem firmware is up to date\\n\\n\n");
             break;
+        case CLOSE_TYPE_SUCCESS:
+            sprintf(close_message, "%s", "#The Modem update Success!\\n\\n\n");
+            break;
+        case CLOSE_TYPE_RETRY:
+            sprintf(close_message, "%s", "#Modem download error, will automatically retry later\\n\\n\n");
+            break;
         default:
             break;
     }
@@ -1727,23 +1744,34 @@ INOTIFY_AGAIN:
                                     if (DEBUG) PWL_LOG_DEBUG("[Notice] Send signal to pref to get version and wait 7 secs");
                                     pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
                                     sleep(7);
-                                    if (start_update_process_pcie(FALSE, PCIE_UPDATE_BASE_FLZ) == RET_OK) {
-                                        // Download success, remove flash data folder
-                                        remove_flash_data(g_update_type);
-                                    } else {
-                                        if (g_need_update) {
-                                            get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
-                                            PWL_LOG_DEBUG("[Notice] already_retry_count: %d", already_retry_count);
-                                            while (already_retry_count < FW_UPDATE_RETRY_TH) {
-                                                PWL_LOG_DEBUG("[Notice] Retry fw udpate");
-                                                if (start_update_process_pcie(TRUE, PCIE_UPDATE_BASE_FLZ) == RET_OK) {
-                                                    remove_flash_data(g_update_type);
-                                                    break;
-                                                } else {
-                                                    get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                                    if (g_is_fw_update_processing == NOT_IN_FW_UPDATE_PROCESSING) {
+                                        if (start_update_process_pcie(FALSE, PCIE_UPDATE_BASE_FLZ) == RET_OK) {
+                                            // Download success, remove flash data folder
+                                            remove_flash_data(g_update_type);
+                                            close_progress_msg_box(CLOSE_TYPE_SUCCESS);
+                                            pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
+                                        } else {
+                                            if (g_need_update) {
+                                                close_progress_msg_box(CLOSE_TYPE_RETRY);
+                                                get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                                                PWL_LOG_DEBUG("[Notice] already_retry_count: %d", already_retry_count);
+                                                while (already_retry_count < FW_UPDATE_RETRY_TH) {
+                                                    PWL_LOG_DEBUG("[Notice] Retry fw udpate");
+                                                    if (start_update_process_pcie(TRUE, PCIE_UPDATE_BASE_FLZ) == RET_OK) {
+                                                        remove_flash_data(g_update_type);
+                                                        close_progress_msg_box(CLOSE_TYPE_SUCCESS);
+                                                        pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
+                                                        break;
+                                                    } else {
+                                                        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                                                        if (already_retry_count >= FW_UPDATE_RETRY_TH)
+                                                            close_progress_msg_box(CLOSE_TYPE_ERROR);
+                                                    }
                                                 }
                                             }
                                         }
+                                    } else {
+                                        PWL_LOG_DEBUG("Another update processing on going, ignore.");
                                     }
                                 }
                             } else {
@@ -1879,6 +1907,31 @@ gint get_sku_id()
         return 0;
     }
     return -1;
+}
+
+gint get_carrier_id() {
+    int err, retry = 0;
+    memset(g_carrier_id, 0, sizeof(g_carrier_id));
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        err = 0;
+        send_message_queue(PWL_CID_GET_CARRIER_ID);
+        pthread_mutex_lock(&g_mutex);
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += PWL_CMD_TIMEOUT_SEC + 2; // Carrier ID took longer to read, add fewer sec
+        int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+        if (result == ETIMEDOUT || result != 0) {
+            PWL_LOG_ERR("Time out to get Carrier ID, retry.");
+            err = 1;
+        }
+        pthread_mutex_unlock(&g_mutex);
+        if (err) {
+            retry++;
+            continue;
+        }
+        PWL_LOG_DEBUG("[Notice] carrier id: %s", g_carrier_id);
+        return RET_OK;
+    }
 }
 
 gint get_current_fw_version()
@@ -2022,6 +2075,14 @@ gint get_current_fw_version()
         if (strlen(g_current_dpv_ver) <= 0) {
             PWL_LOG_ERR("Get DPV version error, abort!");
             return RET_FAILED;
+        }
+        if (DEBUG) {
+            PWL_LOG_DEBUG("In get_current_fw_version, get version:");
+            PWL_LOG_DEBUG("AP version: %s", g_current_fw_ver);
+            PWL_LOG_DEBUG("MD version: %s", g_current_md_ver);
+            PWL_LOG_DEBUG("OP version: %s", g_current_op_ver);
+            PWL_LOG_DEBUG("OEM version: %s", g_current_oem_ver);
+            PWL_LOG_DEBUG("DPV version: %s", g_current_dpv_ver);
         }
         return RET_OK;
     }
@@ -2837,32 +2898,43 @@ void remove_flash_data(int type) {
 void signal_callback_notice_module_recovery_finish(int type) {
     int already_retry_count;
     if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
-        PWL_LOG_DEBUG("[Notice] Receive module recovery finish signal!");
+        PWL_LOG_DEBUG("[Notice] Receive module recovery completed signal!");
         PWL_LOG_DEBUG("[Notice] type is: %d", type);
-        PWL_LOG_DEBUG("[Notice] Sleep 10 secs to wait pref update version");
+        PWL_LOG_DEBUG("[Notice] Sleep 10 secs to wait for pref to update version");
         sleep(10);
         if (check_update_data(type) != RET_OK) {
             PWL_LOG_ERR("Check flash data error, abort.");
             return;
         }
-        if (start_update_process_pcie(TRUE, type) == RET_OK) {
-            // Download success, remove flash data folder
-            remove_flash_data(g_update_type);
-            return;
-        } else {
-            if (g_need_update) {
-                get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
-                PWL_LOG_DEBUG("[Notice] already_retry_count: %d", already_retry_count);
-                while (already_retry_count < FW_UPDATE_RETRY_TH) {
-                    PWL_LOG_DEBUG("[Notice] Retry fw udpate");
-                    if (start_update_process_pcie(TRUE, type) == RET_OK) {
-                        remove_flash_data(g_update_type);
-                        break;
-                    } else {
-                        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+        if (g_is_fw_update_processing == NOT_IN_FW_UPDATE_PROCESSING) {
+            if (start_update_process_pcie(TRUE, type) == RET_OK) {
+                // Download success, remove flash data folder
+                remove_flash_data(g_update_type);
+                close_progress_msg_box(CLOSE_TYPE_SUCCESS);
+                pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
+                return;
+            } else {
+                if (g_need_update) {
+                    close_progress_msg_box(CLOSE_TYPE_RETRY);
+                    get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                    PWL_LOG_DEBUG("[Notice] already_retry_count: %d", already_retry_count);
+                    while (already_retry_count < FW_UPDATE_RETRY_TH) {
+                        PWL_LOG_DEBUG("[Notice] Retry fw udpate");
+                        if (start_update_process_pcie(TRUE, type) == RET_OK) {
+                            remove_flash_data(g_update_type);
+                            close_progress_msg_box(CLOSE_TYPE_SUCCESS);
+                            pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
+                            break;
+                        } else {
+                            get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
+                            if (already_retry_count >= FW_UPDATE_RETRY_TH)
+                                close_progress_msg_box(CLOSE_TYPE_ERROR);
+                        }
                     }
                 }
             }
+        } else {
+            PWL_LOG_DEBUG("Another update processing on going, ignore.");
         }
     }
     return;
@@ -2990,38 +3062,49 @@ int find_image_file_path(char *image_file_name, char *find_prefix, char *image_p
     return RET_OK;
 }
 
-int find_fw_download_image(char *subsysid, char *version) {
+int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
     xmlDoc *doc;
     // xmlNode *root_element;
     xmlChar *xpath_oemssid = (xmlChar*) "//OEMSSID";
+    xmlChar *xpath_carrier = (xmlChar*) "//Carrier";
     xmlChar *xpath_ap_firmware = (xmlChar*) "//APFirmware";
     xmlChar *xpath_md_firmware = (xmlChar*) "//MDFirmware";
     xmlChar *xpath_op_firmware = (xmlChar*) "//OPFirmware";
     xmlChar *xpath_oem_firmware = (xmlChar*) "//OEMFirmware";
 
     xmlXPathObjectPtr xpath_obj;
+    xmlXPathObjectPtr xpath_carrier_obj;
     xmlXPathObjectPtr xpath_ap_firmware_obj;
     xmlXPathObjectPtr xpath_md_firmware_obj;
     xmlXPathObjectPtr xpath_op_firmware_obj;
     xmlXPathObjectPtr xpath_oem_firmware_obj;
 
     xmlNodeSetPtr nodeset = NULL;
+    xmlNodeSetPtr nodeset_carrier = NULL;
     xmlNodeSetPtr nodeset_ap_firmware = NULL;
     xmlNodeSetPtr nodeset_md_firmware = NULL;
     xmlNodeSetPtr nodeset_op_firmware = NULL;
     xmlNodeSetPtr nodeset_oem_firmware = NULL;
 
     xmlChar *subsysid_value = NULL;
+    xmlChar *carrier_id_value = NULL;
     xmlNode *oemssid_node = NULL;
+    xmlNode *carrier_node = NULL;
     xmlNode *temp_node = NULL;
     int default_subsysid_index = -1;
     int subsysid_index = -1;
+    int default_carrier_index = -1;
+    int carrier_index = -1;
     int img_number_count = 0;
     char xml_file[MAX_IMG_FILE_NAME_LEN] = {0};
     char file_folder[10] = {0};
     char temp_find_prefix[MAX_IMG_FILE_NAME_LEN] = {0};
     char temp_file_path[MAX_IMG_FILE_NAME_LEN] = {0};
+    char img_file_path[256] = {0};
     char temp_version_info[OTHER_VERSION_LENGTH] = {0};
+    char temp_xpath[MAX_IMG_FILE_NAME_LEN] = {0};
+    char temp_checksum_value[20] = {0};
+
     sprintf(xml_file, "%s/%s", UNZIP_FOLDER_FW, "FwPackageInfo.xml");
 
     doc = xmlReadFile(xml_file, NULL, 0);
@@ -3049,16 +3132,50 @@ int find_fw_download_image(char *subsysid, char *version) {
         if (DEBUG) PWL_LOG_DEBUG("Target subsysid index: %d", subsysid_index);
 
         oemssid_node = nodeset->nodeTab[subsysid_index];
-        // PWL_LOG_DEBUG("%s", oemssid_node->name);
+        subsysid_value = xmlGetProp(oemssid_node, (xmlChar *) "Subsysid");
+        // strcpy(subsysid_value, xmlGetProp(oemssid_node, "Subsysid"));
+        printf("oemssid_node name: %s\n", subsysid_value);
+
+        // Check Carrier id
+        sprintf(temp_xpath, "/Package/OEMSSIDList/OEMSSID[@Subsysid='%s']/CarrierList/Carrier", subsysid_value);
+        xpath_carrier = (temp_xpath);
+        xpath_carrier_obj = get_node_set(oemssid_node->doc, xpath_carrier);
+
+        if (xpath_carrier_obj) {
+            nodeset_carrier = xpath_carrier_obj->nodesetval;
+            if (DEBUG) PWL_LOG_DEBUG("[Notice] nodeset_carrier->nodeNr: %d", nodeset_carrier->nodeNr);
+            for (int i = 0; i < nodeset_carrier->nodeNr; i++) {
+                carrier_id_value = xmlGetProp(nodeset_carrier->nodeTab[i], "id");
+                if (DEBUG) PWL_LOG_DEBUG("[Notice] carrier_id_value: %s", carrier_id_value);
+                if (xmlStrcmp(carrier_id_value, "default") == 0) {
+                    default_carrier_index = i;
+                } else if (xmlStrcmp(carrier_id_value, carrier_id) == 0) {
+                    carrier_index = i;
+                }
+                if (carrier_index < 0)
+                    carrier_index = default_carrier_index;
+            }
+            if (DEBUG) {
+                PWL_LOG_DEBUG("default_carrier_index: %d", default_carrier_index);
+                PWL_LOG_DEBUG("carrier_index: %d", carrier_index);
+            }
+            carrier_node = nodeset_carrier->nodeTab[carrier_index];
+            carrier_id_value = xmlGetProp(carrier_node, (xmlChar *) "id");
+        }
 
         //Find all ap firmware file
+        sprintf(temp_xpath, "/Package/OEMSSIDList/OEMSSID[@Subsysid='%s']/CarrierList/Carrier[@id='%s']/APFirmware", subsysid_value, carrier_id_value);
+        xpath_ap_firmware = (temp_xpath);
+        PWL_LOG_DEBUG("xpath_ap_firmware: %s", xpath_ap_firmware);
         xpath_ap_firmware_obj = get_node_set(oemssid_node->doc, xpath_ap_firmware);
+
         if (xpath_ap_firmware_obj) {
             nodeset_ap_firmware = xpath_ap_firmware_obj->nodesetval;
             // printf("File: %s, Ver: %s, Type: %s\n", 
             //     xmlGetProp(nodeset_ap_firmware->nodeTab[0], "File"),
             //     xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"),
             //     xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Type"));
+
             memset(temp_version_info, 0, sizeof(temp_version_info));
             strcpy(temp_version_info, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"));
             strcpy(version, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"));
@@ -3070,22 +3187,37 @@ int find_fw_download_image(char *subsysid, char *version) {
                 if (temp_node->type == XML_ELEMENT_NODE) {
                     // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
                     memset(temp_file_path, 0, sizeof(temp_file_path));
+                    memset(img_file_path, 0, sizeof(img_file_path));
                     find_image_file_path(xmlGetProp(temp_node, "File"), temp_find_prefix, temp_file_path);
+
                     if (DEBUG) PWL_LOG_DEBUG("current ap: %s, flz ap: %s", g_current_fw_ver, temp_version_info);
 
                     if (strlen(temp_file_path) > 0) {
+                        if (CHECK_CHECKSUM) {
+                            memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
+                            if (xmlGetProp(temp_node, "checksum")) {
+                                strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                            }
+                            if (strlen(temp_checksum_value) > 0) {
+                                sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
+                            } else {
+                                strcpy(img_file_path, temp_file_path);
+                            }
+                        } else {
+                            strcpy(img_file_path, temp_file_path);
+                        }
                         if (CHECK_AP_VERSION) {
                             if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
                                 if (strncmp(g_current_fw_ver, temp_version_info, strlen(g_current_fw_ver)) == 0) {
-                                    sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                                    sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", img_file_path);
                                 } else {
-                                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                                    strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                                 }
                             } else {
-                                strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                                strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                             }
                         } else {
-                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                            strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                         }
                         img_number_count++;
                     }
@@ -3094,7 +3226,10 @@ int find_fw_download_image(char *subsysid, char *version) {
         }
 
         //Find all md firmware file
+        sprintf(temp_xpath, "/Package/OEMSSIDList/OEMSSID[@Subsysid='%s']/CarrierList/Carrier[@id='%s']/MDFirmware", subsysid_value, carrier_id_value);
+        xpath_md_firmware = (temp_xpath);
         xpath_md_firmware_obj = get_node_set(oemssid_node->doc, xpath_md_firmware);
+
         if (xpath_md_firmware_obj) {
             nodeset_md_firmware = xpath_md_firmware_obj->nodesetval;
             // printf("File: %s, Ver: %s, Type: %s\n", 
@@ -3111,22 +3246,36 @@ int find_fw_download_image(char *subsysid, char *version) {
                 if (temp_node->type == XML_ELEMENT_NODE) {
                     // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
                     memset(temp_file_path, 0, sizeof(temp_file_path));
+                    memset(img_file_path, 0, sizeof(img_file_path));
                     find_image_file_path(xmlGetProp(temp_node, "File"), temp_find_prefix, temp_file_path);
                     if (DEBUG) PWL_LOG_DEBUG("current md: %s, flz md: %s", g_current_md_ver, temp_version_info);
 
                     if (strlen(temp_file_path) > 0) {
+                        if (CHECK_CHECKSUM) {
+                            memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
+                            if (xmlGetProp(temp_node, "checksum")) {
+                                strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                            }
+                            if (strlen(temp_checksum_value) > 0) {
+                                sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
+                            } else {
+                                strcpy(img_file_path, temp_file_path);
+                            }
+                        } else {
+                            strcpy(img_file_path, temp_file_path);
+                        }
                         if (CHECK_MD_VERSION) {
                             if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
                                 if (strncmp(g_current_md_ver, temp_version_info, strlen(g_current_md_ver)) == 0) {
-                                    sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                                    sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", img_file_path);
                                 } else {
-                                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                                    strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                                 }
                             } else {
-                                strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                                strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                             }
                         } else {
-                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                            strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                         }
                         img_number_count++;
                     }
@@ -3135,7 +3284,10 @@ int find_fw_download_image(char *subsysid, char *version) {
         }
 
         //Find OP Firmware
+        sprintf(temp_xpath, "/Package/OEMSSIDList/OEMSSID[@Subsysid='%s']/CarrierList/Carrier[@id='%s']/OPFirmware", subsysid_value, carrier_id_value);
+        xpath_op_firmware = (temp_xpath);
         xpath_op_firmware_obj = get_node_set(oemssid_node->doc, xpath_op_firmware);
+
         if (xpath_op_firmware_obj) {
             nodeset_op_firmware = xpath_op_firmware_obj->nodesetval;
             temp_node = nodeset_op_firmware->nodeTab[0];
@@ -3143,30 +3295,46 @@ int find_fw_download_image(char *subsysid, char *version) {
             memset(temp_version_info, 0, sizeof(temp_version_info));
             sprintf(temp_version_info, "OP.%s", xmlGetProp(temp_node, "Ver"));
             memset(temp_file_path, 0, sizeof(temp_file_path));
+            memset(img_file_path, 0, sizeof(img_file_path));
             find_image_file_path(xmlGetProp(temp_node, "File"), UNZIP_FOLDER_FW, temp_file_path);
             if (DEBUG) PWL_LOG_DEBUG("current op: %s, flz op: %s", g_current_op_ver, temp_version_info);
 
             if (strlen(temp_file_path) > 0) {
+                if (CHECK_CHECKSUM) {
+                    memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
+                    if (xmlGetProp(temp_node, "checksum")) {
+                        strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                    }
+                    if (strlen(temp_checksum_value) > 0) {
+                        sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
+                    } else {
+                        strcpy(img_file_path, temp_file_path);
+                    }
+                } else {
+                    strcpy(img_file_path, temp_file_path);
+                }
                 if (CHECK_OP_VERSION) {
                     if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
                         if (strncmp(g_current_op_ver, temp_version_info, strlen(g_current_op_ver)) == 0) {
-                            sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                            sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", img_file_path);
                         } else {
-                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                            strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                         }
                     } else {
-                        strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                        strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                     }
                 } else {
-                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                    strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                 }
-                // strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
                 img_number_count++;
             }
         }
 
         //Find OEM Firmware
+        sprintf(temp_xpath, "/Package/OEMSSIDList/OEMSSID[@Subsysid='%s']/CarrierList/Carrier[@id='%s']/OEMFirmware", subsysid_value, carrier_id_value);
+        xpath_oem_firmware = (temp_xpath);
         xpath_oem_firmware_obj = get_node_set(oemssid_node->doc, xpath_oem_firmware);
+
         if (xpath_oem_firmware_obj) {
             nodeset_oem_firmware = xpath_oem_firmware_obj->nodesetval;
             temp_node = nodeset_oem_firmware->nodeTab[0];
@@ -3174,24 +3342,37 @@ int find_fw_download_image(char *subsysid, char *version) {
             memset(temp_version_info, 0, sizeof(temp_version_info));
             sprintf(temp_version_info, "OEM.%s", xmlGetProp(temp_node, "Ver"));
             memset(temp_file_path, 0, sizeof(temp_file_path));
+            memset(img_file_path, 0, sizeof(img_file_path));
             find_image_file_path(xmlGetProp(temp_node, "File"), UNZIP_FOLDER_FW, temp_file_path);
             if (DEBUG) PWL_LOG_DEBUG("current oem: %s, flz oem: %s", g_current_oem_ver, temp_version_info);
 
             if (strlen(temp_file_path) > 0) {
+                if (CHECK_CHECKSUM) {
+                    memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
+                    if (xmlGetProp(temp_node, "checksum")) {
+                        strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                    }
+                    if (strlen(temp_checksum_value) > 0) {
+                        sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
+                    } else {
+                        strcpy(img_file_path, temp_file_path);
+                    }
+                } else {
+                    strcpy(img_file_path, temp_file_path);
+                }
                 if (CHECK_OEM_VERSION) {
                     if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
                         if (strncmp(g_current_oem_ver, temp_version_info, strlen(g_current_oem_ver)) == 0) {
-                            sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", temp_file_path);
+                            sprintf(g_pcie_download_image_list[img_number_count], "SKIP_%s", img_file_path);
                         } else {
-                            strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                            strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                         }
                     } else {
-                        strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                        strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                     }
                 } else {
-                    strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
+                    strcpy(g_pcie_download_image_list[img_number_count], img_file_path);
                 }
-                // strcpy(g_pcie_download_image_list[img_number_count], temp_file_path);
                 img_number_count++;
             }
         }
@@ -3358,7 +3539,9 @@ int generate_download_table(char *xml_file) {
                                 continue;
                             memset(temp_checksum, 0, sizeof(temp_checksum));
                             if (CHECK_CHECKSUM) {
-                                parse_checksum(FW_PACKAGE_CHECKSUM_PATH, value_file_name, temp_checksum);
+                                if (!strstr(g_pcie_download_image_list[i], "0x")) {
+                                    parse_checksum(FW_PACKAGE_CHECKSUM_PATH, value_file_name, temp_checksum);
+                                }
                             }
                             if (DEBUG) PWL_LOG_DEBUG("Flash|%s|%s|%s", value_partition_name, g_pcie_download_image_list[i], temp_checksum);
                             fprintf(fp, "Flash|%s|%s|%s\n", value_partition_name, g_pcie_download_image_list[i], temp_checksum);
@@ -3412,7 +3595,7 @@ int check_image_downlaod_table() {
     fclose(fp);
 
     if(!g_need_update) {
-        PWL_LOG_DEBUG("All image already up to date, didn't need update.\n");
+        PWL_LOG_DEBUG("All image up to date, no need to update.");
         return RET_FAILED;
     }
 
@@ -3482,7 +3665,6 @@ int parse_download_table_and_flash() {
         if (flash_image(partition, image, checksum) != RET_OK) {
             PWL_LOG_ERR("Flash %s %s error!", partition, image);
             fclose(fp);
-            close_progress_msg_box(CLOSE_TYPE_ERROR);
             return RET_FAILED;
         }
     }
@@ -3706,11 +3888,11 @@ int flash_image(char *partition, char *image_file, char *checksum) {
     if (strcmp(fb_resp, success_resp) != 0) {
         PWL_LOG_ERR("Flash:[%s] to parition:[%s] failed!", image_file, partition);
         if (strstr(fb_resp, "FAILpartition is not writable")) {
-            PWL_LOG_DEBUG("Ignore B partition flash error.");
-            return RET_OK;  // Remove later, just temporary.
+            PWL_LOG_ERR("Ignore B partition flash error.");
         } else {
-            return RET_FAILED;
+            PWL_LOG_ERR("Flash error: %s", fb_resp);
         }
+        return RET_FAILED;
     }
 
     // Check partition checksum
@@ -3738,16 +3920,7 @@ int flash_image(char *partition, char *image_file, char *checksum) {
                 if (p != NULL) {
                     if (strncmp(checksum, p, strlen(checksum)) != 0) {
                         PWL_LOG_ERR("Image checksum [%s] not match to partition checksum [%s], abort!", checksum, p);
-                        // return RET_FAILED;
-                        // Temporary modify
-                        if (strcmp(partition, "preloader") == 0 ||
-                            strcmp(partition, "mcf3") == 0) {
-                            PWL_LOG_DEBUG("Ignore checksum for: preloader, mcf3");
-                            break;
-                        } else {
-                            return RET_FAILED;
-                        }
-                        // Temporary modify end
+                        return RET_FAILED;
                     } else {
                         PWL_LOG_DEBUG("Checksum check pass!");
                         break;
@@ -3928,6 +4101,7 @@ int switch_t7xx_mode(char *mode) {
 
 int start_update_process_pcie(gboolean is_startup, int based_type) {
     g_update_based_type = based_type;
+
     if (0 != access(FW_UPDATE_STATUS_RECORD, F_OK)) {
         fw_update_status_init();
     }
@@ -3937,7 +4111,12 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
     char sku_id[PWL_MAX_SKUID_SIZE] = {0};
     char fw_package_ver[30] = {0};
     g_need_update = false;
+    // Get subsysid
     get_fwupdate_subsysid(subsysid);
+    // Get carrier id
+    get_carrier_id();
+
+    // Get SKU id
     pwl_get_skuid(sku_id, PWL_MAX_SKUID_SIZE);
     if (DEBUG) PWL_LOG_DEBUG("subsys id: %s, sku id: %s", subsysid, sku_id);
 
@@ -3952,7 +4131,7 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
     PWL_LOG_DEBUG("Current MD version: %s", g_current_md_ver);
     PWL_LOG_DEBUG("Current OP version: %s", g_current_op_ver);
     PWL_LOG_DEBUG("Current OEM version: %s", g_current_oem_ver);
-    PWL_LOG_DEBUG("Current DVP version: %s", g_current_dpv_ver);
+    PWL_LOG_DEBUG("Current DPV version: %s", g_current_dpv_ver);
 
     // Init progress dialog
     g_is_fw_update_processing = IN_FW_UPDATE_PROCESSING;
@@ -3977,11 +4156,12 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
 
     switch (g_update_type) {
         case UPDATE_TYPE_FULL:
-            find_fw_download_image(subsysid, fw_package_ver);
+            PWL_LOG_DEBUG("carrier: %s, sku: %s", g_carrier_id, sku_id);
+            find_fw_download_image(subsysid, g_carrier_id, fw_package_ver);
             find_device_image(sku_id);
             break;
         case UPDATE_TYPE_ONLY_FW:
-            find_fw_download_image(subsysid, fw_package_ver);
+            find_fw_download_image(subsysid, g_carrier_id, fw_package_ver);
             break;
         case UPDATE_TYPE_ONLY_DEV:
             find_device_image(sku_id);
@@ -4014,7 +4194,7 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
             PWL_LOG_ERR("Check flash table failed, abort!");
             if (!is_startup) close_progress_msg_box(CLOSE_TYPE_ERROR);
         } else {
-            PWL_LOG_ERR("Didn't need to update, abort!");
+            PWL_LOG_ERR("No need to update, abort!");
             remove_flash_data(g_update_type);
             if (!is_startup) close_progress_msg_box(CLOSE_TYPE_SKIP);
         }
@@ -4072,7 +4252,7 @@ DO_RESET:
     if (do_fastboot_reboot() != RET_OK) {
         switch_t7xx_mode(MODE_HW_RESET);
     }
-    update_progress_dialog(50, "Finish download...", NULL);
+    update_progress_dialog(10, "Finish download...", NULL);
     g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
     if (update_result == RET_FAILED) {
         set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
@@ -4084,7 +4264,7 @@ DO_RESET:
         gchar port[20];
         memset(port, 0, sizeof(port));
         if (pwl_find_mbim_port(port, sizeof(port))) {
-            // Download process pass and find mbim port suceess
+            // Download process pass and find mbim port success
             set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, 0);
             g_fw_update_retry_count = 0;
             return RET_OK;
@@ -4120,7 +4300,7 @@ int do_fastboot_reboot() {
             if (DEBUG) PWL_LOG_DEBUG("query count: %d, t7xx_mode: %s", i, t7xx_mode);
 
             if (strcmp(t7xx_mode, "ready") == 0) {
-                if (DEBUG) PWL_LOG_DEBUG("Module ready");
+                PWL_LOG_DEBUG("Module ready");
                 return RET_OK;
             }
         }

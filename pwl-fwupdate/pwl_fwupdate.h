@@ -58,6 +58,9 @@
 
 #define CLOSE_TYPE_ERROR            1
 #define CLOSE_TYPE_SKIP             2
+#define CLOSE_TYPE_SUCCESS          3
+#define CLOSE_TYPE_RETRY            4
+
 
 // For pcie device
 #define CHECK_AP_VERSION            1
@@ -131,7 +134,7 @@ int get_oem_version_from_file(char *oem_file_name, char *oem_version);
 // For pcie device
 xmlXPathObjectPtr get_node_set (xmlDocPtr doc, xmlChar *xpath);
 int unzip_flz(char *flz_file, char *unzip_folder);
-int find_fw_download_image(char *subsysid, char *version);
+int find_fw_download_image(char *subsysid, char *carrier_id, char *version);
 int find_image_file_path(char *image_file_name, char *find_prefix, char *image_path);
 int find_device_image(char *sku_id);
 int generate_download_table(char *xml_file);
@@ -147,6 +150,7 @@ int flash_image(char *partition, char *image_name, char *checksum);
 int check_update_data(int check_type);
 int parse_checksum(char *checksum_file, char *key_image, char *checksum_value);
 int do_fastboot_reboot();
+gint get_carrier_id();
 void remove_flash_data(int type);
 
 #endif
