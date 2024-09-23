@@ -23,6 +23,11 @@
 #include "log.h"
 #include "pwl_core.h"
 
+extern gchar* pcieid_info[];
+
+#define AUTOSUSPEND_DELAY_NODE_PATH     "/sys/bus/pci/devices/%s/power/autosuspend_delay_ms"
+#define AUTOSUSPEND_DELAY_VALUE         "5000"
+
 static gpointer mbim_device_thread(gpointer data);
 
 static GMainLoop *gp_loop;
@@ -459,7 +464,15 @@ static gboolean request_update_fw_version(pwlCore     *object,
     PWL_LOG_DEBUG("Received request, send signal to get FW version!");
     pwl_core_emit_get_fw_version_signal(gp_skeleton);
     return TRUE;
+}
 
+static gboolean request_fw_update_check(pwlCore     *object,
+                           GDBusMethodInvocation *invocation) {
+
+    PWL_LOG_DEBUG("Received request, send signal do fw update check");
+    pwl_core_emit_get_fw_version_signal(gp_skeleton);
+    pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLZ);
+    return TRUE;
 }
 
 static gboolean ready_to_fcc_unlock_method(pwlCore     *object,
@@ -675,6 +688,7 @@ static void bus_acquired_hdl(GDBusConnection *connection,
     /** Third step: Attach to dbus signals. */
     (void) g_signal_connect(gp_skeleton, "handle-madpt-ready-method", G_CALLBACK(madpt_ready_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-request-update-fw-version-method", G_CALLBACK(request_update_fw_version), NULL);
+    (void) g_signal_connect(gp_skeleton, "handle-request-fw-update-check-method", G_CALLBACK(request_fw_update_check), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-ready-to-fcc-unlock-method", G_CALLBACK(ready_to_fcc_unlock_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-gpio-reset-method", G_CALLBACK(gpio_reset_method), NULL);
     //(void) g_signal_connect(gp_skeleton, "handle-request-retry-fw-update-method", G_CALLBACK(request_retry_fw_update_method), NULL);
@@ -980,7 +994,7 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
                 g_bootup_failure_count = 0;
                 set_bootup_status_value(BOOTUP_FAILURE_COUNT, g_bootup_failure_count);
                 PWL_LOG_DEBUG("Check module pass!");
-                PWL_LOG_DEBUG("Notify fwupdate start extract flz and check if update");
+                PWL_LOG_DEBUG("Notify fwupdate start extract flz and check for update");
 
                 // Notice pref to update fw version
                 PWL_LOG_INFO("Notify pref to update fw version");
@@ -1043,6 +1057,87 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
     return ((void*)0);
 }
 
+static void prepare_for_sleep_handler(GDBusProxy *proxy, const gchar *sendername,
+                                      const gchar *signalname, GVariant *args,
+                                      gpointer data) {
+    if (strcmp(signalname, "PrepareForSleep") == 0) {
+        gboolean suspend;
+        g_variant_get(args, "(b)", &suspend);
+
+        if (suspend) {
+            PWL_LOG_INFO("Host system about to suspend");
+        } else {
+            PWL_LOG_INFO("Host system resuming");
+        }
+    }
+}
+
+void suspend_monitor_init() {
+    GDBusConnection *connection;
+    GDBusProxy *proxy;
+    g_autoptr(GError) error = NULL;
+
+    connection = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);
+    if (connection == NULL) {
+        PWL_LOG_ERR("Failed to get system bus connection: %s", error->message);
+        return;
+    }
+
+    proxy = g_dbus_proxy_new_sync(connection, G_DBUS_PROXY_FLAGS_NONE, NULL,
+                                  "org.freedesktop.login1",
+                                  "/org/freedesktop/login1",
+                                  "org.freedesktop.login1.Manager",
+                                  NULL, &error);
+
+    if (proxy == NULL) {
+        PWL_LOG_ERR("Failed to create proxy: %s", error->message);
+        g_object_unref(connection);
+        return;
+    }
+
+    g_signal_connect(proxy, "g-signal", G_CALLBACK(prepare_for_sleep_handler), NULL);
+}
+
+void update_autosuspend_delay() {
+    gchar *command = "lspci -D -n | grep ";
+    if (DEBUG) PWL_LOG_DEBUG("pcieid_info[0]: %s", pcieid_info[0]);
+
+    gchar cmd[strlen(command) + strlen(pcieid_info[0]) + 1];
+    memset(cmd, 0, sizeof(cmd));
+    sprintf(cmd, "%s%s", command, pcieid_info[0]);
+
+    FILE *fp = popen(cmd, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("device id check cmd error!!!");
+    }
+
+    char response[200];
+    memset(response, 0, sizeof(response));
+    char *ret = fgets(response, sizeof(response), fp);
+
+    pclose(fp);
+
+    if (ret != NULL && strlen(response) > 0) {
+        const char s[2] = " ";
+        char *domain;
+        domain = strtok(response, s);
+        if (!domain) return;
+
+        char node_path[strlen(AUTOSUSPEND_DELAY_NODE_PATH) + 20];
+        memset(node_path, 0, sizeof(node_path));
+        sprintf(node_path, AUTOSUSPEND_DELAY_NODE_PATH, domain);
+        if (DEBUG) PWL_LOG_DEBUG("auto suspend node path: %s", node_path);
+
+        FILE *fp = fopen(node_path, "w");
+        if (fp) {
+            fprintf(fp, "%s", AUTOSUSPEND_DELAY_VALUE);
+            fclose(fp);
+        } else {
+            PWL_LOG_ERR("Auto suspend delay node open fail!");
+        }
+    }
+}
+
 gint main() {
     PWL_LOG_INFO("start");
 
@@ -1071,6 +1166,10 @@ gint main() {
     if (type == PWL_DEVICE_TYPE_USB) {
         gpio_init();
     } else if (type == PWL_DEVICE_TYPE_PCIE) {
+        // system suspend/resume state monitor
+        suspend_monitor_init();
+        update_autosuspend_delay();
+
         // Get bootup failure limit from file
         if (read_config_from_file(BOOTUP_CONFIG_FILE, CONFIG_MAX_BOOTUP_FAILURE,
                                  &g_bootup_failure_limit) == RET_OK) {
