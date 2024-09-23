@@ -104,3 +104,9 @@ To install services
 - version: 4.0.0
     - pcie device support
     - pcie device FCC unlock & Module recovery
+
+- version: 4.2.0
+    - Firmware update with fastboot support for pcie device
+    - pcie device carrier firmware update switch when sim switch
+    - Enable '--test-quick-suspend-resume feature' flag in ModemManager
+    - Temporary modify wwan module pcie device's autosuspend_delay_ms to 5000

@@ -25,11 +25,12 @@ install(DIRECTORY "${PROJECT_BINARY_DIR}/release/dpkg/opt/pwl" FILE_PERMISSIONS 
 install(DIRECTORY "${PROJECT_BINARY_DIR}/release/dpkg/lib/systemd/system/" DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/systemd/system")
 install(DIRECTORY "${PROJECT_BINARY_DIR}/release/dpkg/usr/share/dbus-1/system.d/" DESTINATION "${CMAKE_INSTALL_PREFIX}/usr/share/dbus-1/system.d")
 install(DIRECTORY "${PROJECT_BINARY_DIR}/release/dpkg/usr/lib/udev/rules.d/" DESTINATION "${CMAKE_INSTALL_PREFIX}/usr/lib/udev/rules.d")
+install(DIRECTORY "${PROJECT_BINARY_DIR}/release/dpkg/etc/systemd/system/ModemManager.service.d/" DESTINATION "${CMAKE_INSTALL_PREFIX}/etc/systemd/system/ModemManager.service.d")
 install(FILES "${PROJECT_SOURCE_DIR}/common/mcc_mnc_list.csv" DESTINATION "${CMAKE_INSTALL_PREFIX}/opt/pwl/")
 
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "pwl-linux-pkgs")
-set(CPACK_PACKAGE_VERSION "4.1.0")
+set(CPACK_PACKAGE_VERSION "4.2.0")
 set(CPACK_DEBIAN_PACKAGE_SECTION "base")
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
