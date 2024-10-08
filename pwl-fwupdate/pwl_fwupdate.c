@@ -3126,6 +3126,7 @@ int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
             } else if (xmlStrcmp(subsysid_value, subsysid) == 0) {
                 subsysid_index = i;
             }
+            xmlFree(subsysid_value);
             if (subsysid_index < 0)
                 subsysid_index = default_subsysid_index;
         }
@@ -3152,6 +3153,7 @@ int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
                 } else if (xmlStrcmp(carrier_id_value, carrier_id) == 0) {
                     carrier_index = i;
                 }
+                xmlFree(carrier_id_value);
                 if (carrier_index < 0)
                     carrier_index = default_carrier_index;
             }
@@ -3177,26 +3179,36 @@ int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
             //     xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Type"));
 
             memset(temp_version_info, 0, sizeof(temp_version_info));
-            strcpy(temp_version_info, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"));
-            strcpy(version, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver"));
+            xmlChar *version_node = xmlGetProp(nodeset_ap_firmware->nodeTab[0], "Ver");
+            strcpy(temp_version_info, version_node);
+            strcpy(version, version_node);
+            xmlFree(version_node);
 
             memset(temp_find_prefix, 0, sizeof(temp_find_prefix));
-            sprintf(temp_find_prefix, "%s/%s*", UNZIP_FOLDER_FW, xmlGetProp(nodeset_ap_firmware->nodeTab[0], "File"));
+            xmlChar *file_node = xmlGetProp(nodeset_ap_firmware->nodeTab[0], "File");
+            sprintf(temp_find_prefix, "%s/%s*", UNZIP_FOLDER_FW, file_node);
+            xmlFree(file_node);
 
             for (temp_node = nodeset_ap_firmware->nodeTab[0]->children; temp_node; temp_node = temp_node->next) {
                 if (temp_node->type == XML_ELEMENT_NODE) {
+                    xmlChar *tmp_node = NULL;
                     // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
                     memset(temp_file_path, 0, sizeof(temp_file_path));
                     memset(img_file_path, 0, sizeof(img_file_path));
-                    find_image_file_path(xmlGetProp(temp_node, "File"), temp_find_prefix, temp_file_path);
+
+                    tmp_node = xmlGetProp(temp_node, "File");
+                    find_image_file_path(tmp_node, temp_find_prefix, temp_file_path);
+                    xmlFree(tmp_node);
 
                     if (DEBUG) PWL_LOG_DEBUG("current ap: %s, flz ap: %s", g_current_fw_ver, temp_version_info);
 
                     if (strlen(temp_file_path) > 0) {
                         if (CHECK_CHECKSUM) {
                             memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
-                            if (xmlGetProp(temp_node, "checksum")) {
-                                strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                            tmp_node = xmlGetProp(temp_node, "checksum");
+                            if (tmp_node) {
+                                strcpy(temp_checksum_value, tmp_node);
+                                xmlFree(tmp_node);
                             }
                             if (strlen(temp_checksum_value) > 0) {
                                 sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
@@ -3237,24 +3249,33 @@ int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
             //     xmlGetProp(nodeset_md_firmware->nodeTab[0], "Ver"),
             //     xmlGetProp(nodeset_md_firmware->nodeTab[0], "Type"));
             memset(temp_version_info, 0, sizeof(temp_version_info));
-            strcpy(temp_version_info, xmlGetProp(nodeset_md_firmware->nodeTab[0], "Ver"));
+            xmlChar *version_node = xmlGetProp(nodeset_md_firmware->nodeTab[0], "Ver");
+            strcpy(temp_version_info, version_node);
+            xmlFree(version_node);
 
             memset(temp_find_prefix, 0, sizeof(temp_find_prefix));
-            sprintf(temp_find_prefix, "%s/%s*", UNZIP_FOLDER_FW, xmlGetProp(nodeset_md_firmware->nodeTab[0], "File"));
+            xmlChar *file_node = xmlGetProp(nodeset_md_firmware->nodeTab[0], "File");
+            sprintf(temp_find_prefix, "%s/%s*", UNZIP_FOLDER_FW, file_node);
+            xmlFree(file_node);
 
             for (temp_node = nodeset_md_firmware->nodeTab[0]->children; temp_node; temp_node = temp_node->next) {
                 if (temp_node->type == XML_ELEMENT_NODE) {
+                    xmlChar *tmp_node = NULL;
                     // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
                     memset(temp_file_path, 0, sizeof(temp_file_path));
                     memset(img_file_path, 0, sizeof(img_file_path));
-                    find_image_file_path(xmlGetProp(temp_node, "File"), temp_find_prefix, temp_file_path);
+                    tmp_node = xmlGetProp(temp_node, "File");
+                    find_image_file_path(tmp_node, temp_find_prefix, temp_file_path);
+                    xmlFree(tmp_node);
                     if (DEBUG) PWL_LOG_DEBUG("current md: %s, flz md: %s", g_current_md_ver, temp_version_info);
 
                     if (strlen(temp_file_path) > 0) {
                         if (CHECK_CHECKSUM) {
                             memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
-                            if (xmlGetProp(temp_node, "checksum")) {
-                                strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                            tmp_node = xmlGetProp(temp_node, "checksum");
+                            if (tmp_node) {
+                                strcpy(temp_checksum_value, tmp_node);
+                                xmlFree(tmp_node);
                             }
                             if (strlen(temp_checksum_value) > 0) {
                                 sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
@@ -3293,17 +3314,24 @@ int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
             temp_node = nodeset_op_firmware->nodeTab[0];
             // printf("%s\n", xmlGetProp(temp_node, "File"));
             memset(temp_version_info, 0, sizeof(temp_version_info));
-            sprintf(temp_version_info, "OP.%s", xmlGetProp(temp_node, "Ver"));
+            xmlChar *version_node = xmlGetProp(temp_node, "Ver");
+            sprintf(temp_version_info, "OP.%s", version_node);
+            xmlFree(version_node);
             memset(temp_file_path, 0, sizeof(temp_file_path));
             memset(img_file_path, 0, sizeof(img_file_path));
-            find_image_file_path(xmlGetProp(temp_node, "File"), UNZIP_FOLDER_FW, temp_file_path);
+            xmlChar *file_node = xmlGetProp(temp_node, "File");
+            find_image_file_path(file_node, UNZIP_FOLDER_FW, temp_file_path);
+            xmlFree(file_node);
             if (DEBUG) PWL_LOG_DEBUG("current op: %s, flz op: %s", g_current_op_ver, temp_version_info);
 
             if (strlen(temp_file_path) > 0) {
+                xmlChar *tmp_node = NULL;
                 if (CHECK_CHECKSUM) {
                     memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
-                    if (xmlGetProp(temp_node, "checksum")) {
-                        strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                    tmp_node = xmlGetProp(temp_node, "checksum");
+                    if (tmp_node) {
+                        strcpy(temp_checksum_value, tmp_node);
+                        xmlFree(tmp_node);
                     }
                     if (strlen(temp_checksum_value) > 0) {
                         sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
@@ -3340,17 +3368,24 @@ int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
             temp_node = nodeset_oem_firmware->nodeTab[0];
             // PWL_LOG_DEBUG("%s", xmlGetProp(temp_node, "File"));
             memset(temp_version_info, 0, sizeof(temp_version_info));
-            sprintf(temp_version_info, "OEM.%s", xmlGetProp(temp_node, "Ver"));
+            xmlChar *version_node = xmlGetProp(temp_node, "Ver");
+            sprintf(temp_version_info, "OEM.%s", version_node);
+            xmlFree(version_node);
             memset(temp_file_path, 0, sizeof(temp_file_path));
             memset(img_file_path, 0, sizeof(img_file_path));
-            find_image_file_path(xmlGetProp(temp_node, "File"), UNZIP_FOLDER_FW, temp_file_path);
+            xmlChar *file_node = xmlGetProp(temp_node, "File");
+            find_image_file_path(file_node, UNZIP_FOLDER_FW, temp_file_path);
+            xmlFree(file_node);
             if (DEBUG) PWL_LOG_DEBUG("current oem: %s, flz oem: %s", g_current_oem_ver, temp_version_info);
 
             if (strlen(temp_file_path) > 0) {
+                xmlChar *tmp_node = NULL;
                 if (CHECK_CHECKSUM) {
                     memset(temp_checksum_value, 0, sizeof(temp_checksum_value));
-                    if (xmlGetProp(temp_node, "checksum")) {
-                        strcpy(temp_checksum_value, xmlGetProp(temp_node, "checksum"));
+                    tmp_node = xmlGetProp(temp_node, "checksum");
+                    if (tmp_node) {
+                        strcpy(temp_checksum_value, tmp_node);
+                        xmlFree(tmp_node);
                     }
                     if (strlen(temp_checksum_value) > 0) {
                         sprintf(img_file_path, "%s|%s", temp_file_path, temp_checksum_value);
@@ -3378,10 +3413,13 @@ int find_fw_download_image(char *subsysid, char *carrier_id, char *version) {
         }
     }
     g_pcie_img_number_count = img_number_count;
+    xmlFree(subsysid_value);
+    xmlFree(carrier_id_value);
     xmlXPathFreeObject(xpath_ap_firmware_obj);
     xmlXPathFreeObject(xpath_md_firmware_obj);
     xmlXPathFreeObject(xpath_op_firmware_obj);
     xmlXPathFreeObject(xpath_oem_firmware_obj);
+    xmlXPathFreeObject(xpath_carrier_obj);
     xmlXPathFreeObject(xpath_obj);
     xmlFreeDoc(doc);
     return RET_OK;
@@ -3412,12 +3450,22 @@ int find_device_image(char *sku_id) {
     // nodeset_ap_firmware->nodeTab[0]->children
     for (temp_node = nodeset_sku_id->nodeTab[0]; temp_node; temp_node = temp_node->next){
         if (temp_node->type == XML_ELEMENT_NODE) {
-            if (strcmp(sku_id, xmlGetProp(temp_node, "ProductID")) == 0) {
-                sprintf(image_name, "%s.img", xmlGetProp(temp_node, "DevID"));
+            xmlChar *prod_node = xmlGetProp(temp_node, "ProductID");
+            char prod_id[PWL_MAX_SKUID_SIZE] = {0};
+            if (prod_node) {
+                int len = (strlen(prod_node) > (PWL_MAX_SKUID_SIZE - 1) ? (PWL_MAX_SKUID_SIZE - 1) : strlen(prod_node));
+                strncpy(prod_id, prod_node, len);
+            }
+            xmlFree(prod_node);
+
+            if (strcmp(sku_id, prod_id) == 0) {
+                xmlChar *dev_node = xmlGetProp(temp_node, "DevID");
+                sprintf(image_name, "%s.img", dev_node);
                 find_image_file_path(image_name, UNZIP_FOLDER_DVP, image_path);
 
                 if (DEBUG) PWL_LOG_DEBUG("Dev image: %s", image_path);
-                if (DEBUG) PWL_LOG_DEBUG("current dpv: %s, flz dpv: %s", g_current_dpv_ver, xmlGetProp(temp_node, "DevID"));
+                if (DEBUG) PWL_LOG_DEBUG("current dpv: %s, flz dpv: %s", g_current_dpv_ver, dev_node);
+                xmlFree(dev_node);
 
                 // Get checksum for Device package image
                 memset(g_dpv_image_checksum, 0, sizeof(g_dpv_image_checksum));
@@ -3429,11 +3477,13 @@ int find_device_image(char *sku_id) {
                 }
                 if (CHECK_DPV_VERSION) {
                     if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
-                        if (strncmp(g_current_dpv_ver, xmlGetProp(temp_node, "DevID"), strlen(g_current_dpv_ver)) == 0) {
+                        dev_node = xmlGetProp(temp_node, "DevID");
+                        if (strncmp(g_current_dpv_ver, dev_node, strlen(g_current_dpv_ver)) == 0) {
                             sprintf(g_pcie_download_image_list[g_pcie_img_number_count], "SKIP_%s", image_path);
                         } else {
                             strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
                         }
+                        xmlFree(dev_node);
                     } else {
                         strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
                     }
@@ -3514,7 +3564,7 @@ int generate_download_table(char *xml_file) {
                 if (xmlStrcmp(storage_type_child_node->name, "partition_index") == 0) {
                     // Get partition index number
                     attr = storage_type_child_node->properties;
-                    value = xmlGetProp(storage_type_child_node, (xmlChar *)"name");
+                    //value = xmlGetProp(storage_type_child_node, (xmlChar *)"name");
 
                     // Get partition name, file name and if download
                     for (element = storage_type_child_node->children; element; element = element->next) {
@@ -3547,6 +3597,9 @@ int generate_download_table(char *xml_file) {
                             fprintf(fp, "Flash|%s|%s|%s\n", value_partition_name, g_pcie_download_image_list[i], temp_checksum);
                         }
                     }
+                    g_free(value_partition_name);
+                    g_free(value_file_name);
+                    g_free(value_is_download);
                 }
             }
         }
@@ -3558,12 +3611,8 @@ int generate_download_table(char *xml_file) {
         }
 
         PWL_LOG_DEBUG("Flash %d partitions, %d images", flash_count, g_pcie_img_number_count);
-        xmlFreeNode(cur_node);
-        // xmlFreeNode(storage_type_node);
-        xmlFreeNode(storage_type_child_node);
-        xmlFreeNode(element);
-        xmlFreeNode(root_element);
-        xmlFree(doc);
+
+        xmlFreeDoc(doc);
 
         fclose(fp);
         return RET_OK;
@@ -4102,9 +4151,21 @@ int switch_t7xx_mode(char *mode) {
 int start_update_process_pcie(gboolean is_startup, int based_type) {
     g_update_based_type = based_type;
 
-    if (0 != access(FW_UPDATE_STATUS_RECORD, F_OK)) {
-        fw_update_status_init();
+    // Init fw update status file
+    if (fw_update_status_init() == 0) {
+        // get_fw_update_status_value(FIND_FASTBOOT_RETRY_COUNT, &g_check_fastboot_retry_count);
+        // get_fw_update_status_value(WAIT_MODEM_PORT_RETRY_COUNT, &g_wait_modem_port_retry_count);
+        // get_fw_update_status_value(WAIT_AT_PORT_RETRY_COUNT, &g_wait_at_port_retry_count);
+        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &g_fw_update_retry_count);
+        get_fw_update_status_value(DO_HW_RESET_COUNT, &g_do_hw_reset_count);
+        get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &g_need_retry_fw_update);
     }
+
+    if (g_fw_update_retry_count > FW_UPDATE_RETRY_TH || g_do_hw_reset_count > HW_RESET_RETRY_TH) {
+        PWL_LOG_ERR("Reached retry threadshold!!! stop firmware update!!! (%d,%d)", g_fw_update_retry_count, g_do_hw_reset_count);
+        return RET_FAILED;
+    }
+
     FILE *fp;
     int update_result = RET_FAILED;
     char subsysid[10] = {0};
@@ -4396,15 +4457,19 @@ int parse_checksum(char *checksum_file, char *key_image, char *checksum_value) {
 
     for (temp_node = nodeset_file->nodeTab[0]; temp_node; temp_node = temp_node->next) {
         if (temp_node->type == XML_ELEMENT_NODE) {
-            if (strstr(key_image, xmlGetProp(temp_node, "name"))) {
-                if (strlen(xmlGetProp(temp_node, "checksum")) > 0) {
-                    strcpy(checksum_value, xmlGetProp(temp_node, "checksum"));
+            xmlChar *name_node = xmlGetProp(temp_node, "name");
+            if (strstr(key_image, name_node)) {
+                xmlChar *checksum_node = xmlGetProp(temp_node, "checksum");
+                if (strlen(checksum_node) > 0) {
+                    strcpy(checksum_value, checksum_node);
                     ret = RET_OK;
                 } else {
                     PWL_LOG_ERR("%s checksum value is empty!", key_image);
                     ret = RET_FAILED;
                 }
+                xmlFree(checksum_node);
             }
+            xmlFree(name_node);
         }
     }
     xmlXPathFreeObject(xpath_file_obj);
