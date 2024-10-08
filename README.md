@@ -110,3 +110,7 @@ To install services
     - pcie device carrier firmware update switch when sim switch
     - Enable '--test-quick-suspend-resume feature' flag in ModemManager
     - Temporary modify wwan module pcie device's autosuspend_delay_ms to 5000
+
+- version: 4.2.1
+    - Override Test options in ModemManager
+    - Fix firmware update memory leak
