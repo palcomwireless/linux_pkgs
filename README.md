@@ -114,3 +114,6 @@ To install services
 - version: 4.2.1
     - Override Test options in ModemManager
     - Fix firmware update memory leak
+
+- version: 4.2.2
+    - Device list update
