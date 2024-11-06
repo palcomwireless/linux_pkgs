@@ -24,14 +24,15 @@
 static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
 static char *g_subsysid;
 
-char *usb_devices[] = { "0CBD", "0CC2", "0CC1", "0CC4", "0CB5",
-                        "0CB6", "0CB7", "0CB8", "0CB2", "0CB3",
-                        "0CB4", "0CB9", "0CBA", "0CBB", "0CBC",
-                        "0CD9", "0CDA", "0CF4", "0CF3", "0CE8",
-                        "0CF7", "0CF9", "0CFA", "0CF5", "0CF6" };
+char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
+                        "0CB2", "0CB3", "0CB4", "0CB9", "0CBA",
+                        "0CBB", "0CBC", "0CD9", "0CDA", "0CF4",
+                        "0CE8", "0CF9", "0CF5", "0CF6", "0D5F",
+                        "0D60", "0D5C", "0D5E", "0D47", "0D48",
+                        "0D49", "0D61", "0D4D", "0D4E", "0D4F",
+                        "0D65" };
 
-char *pcie_devices[] = { "0CF4", "0CF5", "0CF6", "0CDD", "0CF1",
-                         "0CDB" };
+char *pcie_devices[] = { "0CF4", "0CF5", "0CDD", "0CF1", "0CDB" };
 
 gchar* usbid_info[] = {
     "413c:8217",
