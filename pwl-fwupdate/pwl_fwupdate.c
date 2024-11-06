@@ -257,20 +257,14 @@ char* get_oem_sku_id(char *ssid)
 
     if (strcmp(ssid, "0CBD") == 0)
         return "4131002";
-    else if (strcmp(ssid, "0CC2") == 0)
-        return "4131004";
     else if (strcmp(ssid, "0CC1") == 0)
         return "4131003";
     else if (strcmp(ssid, "0CC4") == 0)
         return "4131003";
     else if (strcmp(ssid, "0CB5") == 0)
         return "4131001";
-    else if (strcmp(ssid, "0CB6") == 0)
-        return "4131005";
     else if (strcmp(ssid, "0CB7") == 0)
         return "4131001";
-    else if (strcmp(ssid, "0CB8") == 0)
-        return "4131005";
     else if (strcmp(ssid, "0CB2") == 0)
         return "4131001";
     else if (strcmp(ssid, "0CB3") == 0)
@@ -291,19 +285,37 @@ char* get_oem_sku_id(char *ssid)
         return "4131001";
     else if (strcmp(ssid, "0CF4") == 0)
         return "4131007";
-    else if (strcmp(ssid, "0CF3") == 0)
-        return "4131006";
     else if (strcmp(ssid, "0CE8") == 0)
         return "4131009";
-    else if (strcmp(ssid, "0CF7") == 0)
-        return "4131010";
     else if (strcmp(ssid, "0CF9") == 0)
         return "4131009";
-    else if (strcmp(ssid, "0CFA") == 0)
-        return "4131010";
     else if (strcmp(ssid, "0CF5") == 0)
         return "4131008";
     else if (strcmp(ssid, "0CF6") == 0)
+        return "4131008";
+    else if (strcmp(ssid, "0D5F") == 0)
+        return "4131009";
+    else if (strcmp(ssid, "0D60") == 0)
+        return "4131009";
+    else if (strcmp(ssid, "0D5C") == 0)
+        return "4131009";
+    else if (strcmp(ssid, "0D5E") == 0)
+        return "4131009";
+    else if (strcmp(ssid, "0D47") == 0)
+        return "4131007";
+    else if (strcmp(ssid, "0D48") == 0)
+        return "4131007";
+    else if (strcmp(ssid, "0D49") == 0)
+        return "4131007";
+    else if (strcmp(ssid, "0D61") == 0)
+        return "4131007";
+    else if (strcmp(ssid, "0D4D") == 0)
+        return "4131008";
+    else if (strcmp(ssid, "0D4E") == 0)
+        return "4131008";
+    else if (strcmp(ssid, "0D4F") == 0)
+        return "4131008";
+    else if (strcmp(ssid, "0D65") == 0)
         return "4131008";
     else
         return "4131001";
