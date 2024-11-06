@@ -49,13 +49,10 @@ typedef struct {
 
 s_skuid_to_gpio g_skuid_to_gpio[] = {
         {"0CBD", 883},
-        {"0CC2", 883},
         {"0CC1", 883},
         {"0CC4", 883},
         {"0CB5", 717},
-        {"0CB6", 717},
         {"0CB7", 595},
-        {"0CB8", 595},
         {"0CB2", 717},
         {"0CB3", 717},
         {"0CB4", 595},
@@ -66,13 +63,22 @@ s_skuid_to_gpio g_skuid_to_gpio[] = {
         {"0CD9", 717},
         {"0CDA", 717},
         {"0CF4", 883},
-        {"0CF3", 883},
         {"0CE8", 883},
-        {"0CF7", 883},
         {"0CF9", 595},
-        {"0CFA", 595},
         {"0CF5", 883},
-        {"0CF6", 595}
+        {"0CF6", 595},
+        {"0D5F", 000}, // TODO
+        {"0D60", 000}, // TODO
+        {"0D5C", 000}, // TODO
+        {"0D5E", 000}, // TODO
+        {"0D47", 000}, // TODO
+        {"0D48", 000}, // TODO
+        {"0D49", 000}, // TODO
+        {"0D61", 000}, // TODO
+        {"0D4D", 000}, // TODO
+        {"0D4E", 000}, // TODO
+        {"0D4F", 000}, // TODO
+        {"0D65", 000}, // TODO
 };
 
 typedef void (*mbim_device_ready_callback)(void);
