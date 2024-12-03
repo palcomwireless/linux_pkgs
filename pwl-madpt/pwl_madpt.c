@@ -495,15 +495,15 @@ static gpointer msg_queue_thread_func(gpointer data) {
                             }
                             send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, id);
                         } else {
-                            PWL_LOG_ERR("SPB response format not correct, can't parse carrier id");
+                            PWL_LOG_ERR("SBP response format not correct, can't parse carrier id");
                             send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, "");
                         }
                     } else {
-                        PWL_LOG_ERR("SPB response format not correct, can't parse carrier id");
+                        PWL_LOG_ERR("SBP response format not correct, can't parse carrier id");
                         send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, "");
                     }
                 } else {
-                    PWL_LOG_ERR("Can't get sim SPB id, clear carrier id.");
+                    PWL_LOG_ERR("Can't get sim SBP id, clear carrier id.");
                     send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, "");
                 }
                 break;
