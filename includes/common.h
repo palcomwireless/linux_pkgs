@@ -83,11 +83,31 @@
 #define UPDATE_DEV_FLZ_FILE             "/opt/pwl/firmware/DevPackage.flz"
 #define UPDATE_FW_FOLDER_FILE           "/opt/pwl/firmware/FwPackage"
 #define UPDATE_DEV_FOLDER_FILE          "/opt/pwl/firmware/DevPackage"
+#define PREFERRED_CARRIER_ID_FILE       "/opt/pwl/preferred_carrier_id"
+
 #define MAX_FW_PACKAGE_PATH_LEN         128
 #define TYPE_FLASH_FLZ                  0
 #define TYPE_FLASH_FOLDER               1
 #define PCIE_UPDATE_BASE_FLZ            0
 #define PCIE_UPDATE_BASE_FLASH_FOLDER   1
+
+// For CXP carrier
+#define SBP_ID_ATT          7
+#define SBP_ID_TMO_US       8
+#define SBP_ID_VERIZON      12
+#define SBP_ID_SPRINT       20
+#define SBP_ID_USCC         236
+#define SBP_ID_CMCC         1
+#define SBP_ID_CU           2
+#define SBP_ID_CT           9
+#define SBP_ID_DOCOMO       17
+#define SBP_ID_SOFTBANK     50
+#define SBP_ID_KDDI         129
+#define SBP_ID_KT           114
+#define SBP_ID_SKT          115
+#define SBP_ID_UPLUS        116
+#define SBP_ID_GENERIC      65535
+#define CXP_CARRIER_NUMBER  14
 
 #define PWL_MQ_PATH(x) \
     ((x == PWL_MQ_ID_CORE)        ? PWL_MQ_PATH_CORE : \
@@ -115,6 +135,8 @@ typedef enum {
     PWL_CID_GET_MD_VER,
     PWL_CID_GET_OP_VER,
     PWL_CID_GET_DPV_VER,
+    PWL_CID_GET_PREF_CARRIER_ID,
+    PWL_CID_GET_CXP_REBOOT_FLAG,
     PLW_CID_MAX_PREF,
     /* request to madpt */
     PWL_CID_GET_CIMI,
@@ -157,6 +179,8 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_MD_VER] = "GET_MD_VER",
     [PWL_CID_GET_OP_VER] = "GET_OP_VER",
     [PWL_CID_GET_DPV_VER] = "GET_DPV_VER",
+    [PWL_CID_GET_PREF_CARRIER_ID] = "GET_PREF_CARRIER_ID",
+    [PWL_CID_GET_CXP_REBOOT_FLAG] = "GET_CXP_REBOOT_FLAG",
     [PWL_CID_GET_CIMI] = "GET_CIMI",
     [PWL_CID_GET_ATE] = "GET_ATE",
     [PWL_CID_GET_ATI] = "GET_ATI",
