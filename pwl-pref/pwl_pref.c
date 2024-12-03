@@ -54,6 +54,10 @@ static bool g_is_get_cimi = FALSE;
 gboolean g_is_sim_insert = FALSE;
 gboolean g_set_pref_carrier_ret = FALSE;
 gboolean g_check_sim_carrier_on_going = FALSE;
+gboolean g_need_cxp_reboot = FALSE;
+int g_sim_ready_state = -1;
+int g_pref_carrier_id = SBP_ID_GENERIC;
+int g_current_carrier_id = SBP_ID_GENERIC;
 
 static void cb_owner_name_changed_notify(GObject *object, GParamSpec *pspec, gpointer userdata);
 static bool register_client_signal_handler(pwlCore *p_proxy);
@@ -61,6 +65,22 @@ static bool register_client_signal_handler(pwlCore *p_proxy);
 static gchar g_manufacturer[PWL_MAX_MFR_SIZE] = {0};
 static gchar g_skuid[PWL_MAX_SKUID_SIZE] = {0};
 static gchar g_fwver[INFO_BUFFER_SIZE] = {0};
+static gint g_cxp_carrier_list[CXP_CARRIER_NUMBER] = {
+    SBP_ID_ATT,
+    SBP_ID_TMO_US,
+    SBP_ID_VERIZON,
+    SBP_ID_SPRINT,
+    SBP_ID_USCC,
+    SBP_ID_CMCC,
+    SBP_ID_CU,
+    SBP_ID_CT,
+    SBP_ID_DOCOMO,
+    SBP_ID_SOFTBANK,
+    SBP_ID_KDDI,
+    SBP_ID_KT,
+    SBP_ID_SKT,
+    SBP_ID_UPLUS
+};
 
 static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
 
@@ -330,6 +350,32 @@ void signal_callback_get_fw_version(const gchar* arg) {
         }
     }
 
+    // Get preferred carrier id
+    if (g_sim_ready_state == PWL_SIM_STATE_INITIALIZED) {
+        get_preferred_carrier_id();
+        PWL_LOG_DEBUG("[CXP] Preffered carrier id: %d", g_pref_carrier_id);
+        // Get Sim carrier id
+        g_current_carrier_id = -1;
+        for (int i = 0; i < 3; i++) {
+            send_message_queue(PWL_CID_GET_CARRIER_ID);
+            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_GET_CARRIER_ID]);
+            }
+            g_usleep(1000 * 100);  // modem return without OK/ERROR, wait a bit for timeout response parse
+            if (g_current_carrier_id != -1) {
+                break;
+            } else {
+                g_usleep(1000 * 500);
+                continue;
+            }
+        }
+        if (g_current_carrier_id != -1) {
+            g_need_cxp_reboot = is_need_cxp_reboot(g_current_carrier_id, g_pref_carrier_id);
+            set_preferred_carrier_id(g_current_carrier_id);
+        }
+        if (DEBUG) PWL_LOG_DEBUG("[CXP] Need CXP Reboot: %d", g_need_cxp_reboot);
+    }
+
     for (int i = 0; i < 3; i++) {
         send_message_queue(PWL_CID_GET_CRSM);
         if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
@@ -426,13 +472,11 @@ gint get_sim_carrier_info(int retry_delay, int retry_limit) {
     return -1;
 }
 
-gint get_preferred_carrier()
-{
+gint get_preferred_carrier() {
     int err, retry = 0;
     memset(g_pref_carrier, 0, sizeof(g_pref_carrier));
     sleep(3);
-    while (retry < PWL_FW_UPDATE_RETRY_LIMIT)
-    {
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
         err = 0;
         send_message_queue(PWL_CID_GET_PREF_CARRIER);
         if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
@@ -449,6 +493,67 @@ gint get_preferred_carrier()
     return -1;
 }
 
+gint get_preferred_carrier_id() {
+    char buffer[255];
+    FILE *file = fopen(PREFERRED_CARRIER_ID_FILE, "r");
+    if (file) {
+        while (fgets(buffer, 255, file)) {
+            if (strlen(buffer) > 0) {
+                g_pref_carrier_id = atoi(buffer);
+            } else {
+                g_pref_carrier_id = SBP_ID_GENERIC;
+            }
+        }
+        fclose(file);
+    } else {
+        g_pref_carrier_id = SBP_ID_GENERIC;
+    }
+    return RET_OK;
+}
+
+gint set_preferred_carrier_id(int carrier_id) {
+    FILE *file = fopen(PREFERRED_CARRIER_ID_FILE, "w");
+    if (file == NULL) {
+        PWL_LOG_ERR("Create preferred carrier id file error!");
+        return RET_FAILED;
+    }
+
+    fprintf(file, "%d", carrier_id);
+    fclose(file);
+    if (DEBUG) PWL_LOG_DEBUG("Set preferred id to %d", carrier_id);
+    return RET_OK;
+}
+
+gboolean is_cxp_carrier(int carrier_id) {
+    for (int i = 0; i < CXP_CARRIER_NUMBER; i++) {
+        if (carrier_id == g_cxp_carrier_list[i])
+            return true;
+    }
+    return false;
+}
+
+gboolean is_need_cxp_reboot(int current_carrier_id, int pref_carrier_id) {
+    // === No need case: ===
+    // The same carrier id
+    if (current_carrier_id == pref_carrier_id) {
+        return false;
+    }
+    // None CXP -> None CXP
+    if (!is_cxp_carrier(current_carrier_id) && !is_cxp_carrier(pref_carrier_id)) {
+        return false;
+    }
+    // === Reboot case: ===
+    // None CXP -> CXP
+    // CXP -> CXP
+    // CXP -> Non CXP
+    if ((!is_cxp_carrier(pref_carrier_id) && is_cxp_carrier(current_carrier_id)) ||
+        (is_cxp_carrier(pref_carrier_id) && is_cxp_carrier(current_carrier_id))  ||
+        (is_cxp_carrier(pref_carrier_id) && !is_cxp_carrier(current_carrier_id))) {
+        return true;
+    } else {
+        return false;
+    }
+}
 void send_message_queue_with_content(uint32_t cid, char *content) {
     mqd_t mq;
     mq = mq_open(CID_DESTINATION(cid), O_WRONLY);
@@ -526,6 +631,8 @@ void signal_callback_sim_state_change(gint ready_state) {
                 break;
         }
     } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        PWL_LOG_DEBUG("[CXP] sim_ready_state: %d", ready_state);
+        g_sim_ready_state = ready_state;
         switch (ready_state) {
             case PWL_SIM_STATE_INITIALIZED:
                 PWL_LOG_DEBUG("Sim insert, send signal to do fw update check");
@@ -618,6 +725,7 @@ static gpointer msg_queue_thread_func(gpointer data) {
     attr.mq_curmsgs = 0;
     char mnc_len_str[2];
     char sim_mcc_mnc[2][4];
+    char pref_carrier_id[10] = {0};
     /* create the message queue */
     mq = mq_open(PWL_MQ_PATH_PREF, O_CREAT | O_RDONLY, 0644, &attr);
 
@@ -686,6 +794,20 @@ static gpointer msg_queue_thread_func(gpointer data) {
                     PWL_LOG_ERR("DPV version not ready!");
                 }
                 break;
+            case PWL_CID_GET_PREF_CARRIER_ID:
+                PWL_LOG_DEBUG("[CXP] PWL_CID_GET_PREF_CARRIER_ID");
+                get_preferred_carrier_id();
+                memset(pref_carrier_id, 0, sizeof(pref_carrier_id));
+                sprintf(pref_carrier_id, "%d", g_pref_carrier_id);
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, pref_carrier_id);
+                break;
+            case PWL_CID_GET_CXP_REBOOT_FLAG:
+                PWL_LOG_DEBUG("[CXP] PWL_CID_GET_CXP_REBOOT_FLAG");
+                if (g_need_cxp_reboot)
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, "1");
+                else
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, "0");
+                break;
             case PWL_CID_UPDATE_FW_VER:
                 PWL_LOG_DEBUG("Receive update req, send req msg.");
                 send_message_queue(PWL_CID_GET_FW_VER);
@@ -723,6 +845,15 @@ static gpointer msg_queue_thread_func(gpointer data) {
                     get_carrier_from_sim(sim_mcc_mnc[0], sim_mcc_mnc[1]);
                     PWL_LOG_DEBUG("Sim carrier: %s", g_sim_carrier);
                     g_is_get_cimi = TRUE;
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_CARRIER_ID:
+                if (message.status == PWL_CID_STATUS_OK) {
+                    if (strlen(message.response) > 0) {
+                        g_current_carrier_id = atoi(message.response);
+                        if (DEBUG) PWL_LOG_DEBUG("Sim Carrier ID: %d", g_current_carrier_id);
+                    }
                 }
                 pthread_cond_signal(&g_cond);
                 break;

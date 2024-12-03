@@ -40,5 +40,9 @@ void split_fw_versions(char *fw_version);
 gint get_sim_carrier_info(int retry_delay, int retry_limit);
 gint get_preferred_carrier();
 gint set_preferred_carrier(char *carrier, int retry_limit);
+gint get_preferred_carrier_id();
+gint set_preferred_carrier_id(int carrier_id);
+gboolean is_need_cxp_reboot(int current_carrier_id, int pref_carrier_id);
+gboolean is_cxp_carrier(int carrier_id);
 void split_pcie_device_versions(char *sw_version);
 #endif
