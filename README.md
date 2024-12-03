@@ -117,3 +117,6 @@ To install services
 
 - version: 4.2.2
     - Device list update
+
+- version: 4.3.0
+    - Modem CXP reboot feature
