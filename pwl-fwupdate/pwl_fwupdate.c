@@ -86,6 +86,7 @@ char g_device_package_ver[DEVICE_PACKAGE_VERSION_LENGTH];
 char g_current_fw_ver[FW_VERSION_LENGTH] = {0};
 char g_oem_pri_ver[OEM_PRI_VERSION_LENGTH];
 char g_carrier_id[10] = {0};
+gboolean g_need_cxp_reboot = FALSE;
 gboolean gb_del_tune_code_ret = FALSE;
 gboolean gb_set_oem_pri_ver_ret = FALSE;
 gboolean gb_set_pref_carrier_ret = FALSE;
@@ -723,13 +724,22 @@ void* msg_queue_thread_func() {
                     g_retry_fw_update = TRUE;
                 }
                 break;
-            case PWL_CID_GET_CARRIER_ID:
+            case PWL_CID_GET_PREF_CARRIER_ID:
                 if (strlen(message.response) > 0 && (strlen(message.response) < sizeof(g_carrier_id))) {
                     PWL_LOG_DEBUG("Carrier ID: %s", message.response);
                     strcpy(g_carrier_id, message.response);
                 } else {
                     PWL_LOG_ERR("Carrier id abnormal, clear g_carrier_id");
                     memset(g_carrier_id, 0, sizeof(g_carrier_id));
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_CXP_REBOOT_FLAG:
+                if (strlen(message.response) > 0) {
+                    if (strncmp(message.response, "1", 1) == 0)
+                        g_need_cxp_reboot = TRUE;
+                    else
+                        g_need_cxp_reboot = FALSE;
                 }
                 pthread_cond_signal(&g_cond);
                 break;
@@ -1782,6 +1792,12 @@ INOTIFY_AGAIN:
                                                 }
                                             }
                                         }
+                                        // Check if need cxp reboot
+                                        if (g_need_cxp_reboot) {
+                                            g_need_cxp_reboot = FALSE;
+                                            if (DEBUG) PWL_LOG_DEBUG("[CXP] Do reboot");
+                                            switch_t7xx_mode(MODE_HW_RESET);
+                                        }
                                     } else {
                                         PWL_LOG_DEBUG("Another update processing on going, ignore.");
                                     }
@@ -1926,7 +1942,7 @@ gint get_carrier_id() {
     memset(g_carrier_id, 0, sizeof(g_carrier_id));
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
         err = 0;
-        send_message_queue(PWL_CID_GET_CARRIER_ID);
+        send_message_queue(PWL_CID_GET_PREF_CARRIER_ID);
         pthread_mutex_lock(&g_mutex);
         struct timespec timeout;
         clock_gettime(CLOCK_REALTIME, &timeout);
@@ -1942,6 +1958,31 @@ gint get_carrier_id() {
             continue;
         }
         PWL_LOG_DEBUG("[Notice] carrier id: %s", g_carrier_id);
+        return RET_OK;
+    }
+}
+
+gint get_cxp_reboot_flag() {
+    int err, retry = 0;
+    g_need_cxp_reboot = FALSE;
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        err = 0;
+        send_message_queue(PWL_CID_GET_CXP_REBOOT_FLAG);
+        pthread_mutex_lock(&g_mutex);
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += PWL_CMD_TIMEOUT_SEC + 2; // Carrier ID took longer to read, add fewer sec
+        int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+        if (result == ETIMEDOUT || result != 0) {
+            PWL_LOG_ERR("Time out to get CXP reboot flag, retry.");
+            err = 1;
+        }
+        pthread_mutex_unlock(&g_mutex);
+        if (err) {
+            retry++;
+            continue;
+        }
+        PWL_LOG_DEBUG("[CXP] CXP reboot: %d", g_need_cxp_reboot);
         return RET_OK;
     }
 }
@@ -2944,6 +2985,12 @@ void signal_callback_notice_module_recovery_finish(int type) {
                         }
                     }
                 }
+            }
+            // Check if need cxp reboot
+            if (g_need_cxp_reboot) {
+                g_need_cxp_reboot = FALSE;
+                if (DEBUG) PWL_LOG_DEBUG("[CXP] Do reboot");
+                switch_t7xx_mode(MODE_HW_RESET);
             }
         } else {
             PWL_LOG_DEBUG("Another update processing on going, ignore.");
@@ -4188,6 +4235,7 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
     get_fwupdate_subsysid(subsysid);
     // Get carrier id
     get_carrier_id();
+    get_cxp_reboot_flag();
 
     // Get SKU id
     pwl_get_skuid(sku_id, PWL_MAX_SKUID_SIZE);
@@ -4294,6 +4342,7 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
     update_result = RET_OK;
 
 DO_RESET:
+    g_need_cxp_reboot = FALSE;
     PWL_LOG_DEBUG("[Notice] DO RESET, update_result: %d", update_result);
 
     update_progress_dialog(20, "Preparing reset...", NULL);

@@ -151,6 +151,7 @@ int check_update_data(int check_type);
 int parse_checksum(char *checksum_file, char *key_image, char *checksum_value);
 int do_fastboot_reboot();
 gint get_carrier_id();
+gint get_cxp_reboot_flag();
 void remove_flash_data(int type);
 
 #endif
