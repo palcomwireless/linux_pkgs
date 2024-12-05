@@ -79,7 +79,8 @@ static gint g_cxp_carrier_list[CXP_CARRIER_NUMBER] = {
     SBP_ID_KDDI,
     SBP_ID_KT,
     SBP_ID_SKT,
-    SBP_ID_UPLUS
+    SBP_ID_UPLUS,
+    SBP_ID_FIRSTNET
 };
 
 static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
