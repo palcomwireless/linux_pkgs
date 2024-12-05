@@ -106,8 +106,9 @@
 #define SBP_ID_KT           114
 #define SBP_ID_SKT          115
 #define SBP_ID_UPLUS        116
+#define SBP_ID_FIRSTNET     196
 #define SBP_ID_GENERIC      65535
-#define CXP_CARRIER_NUMBER  14
+#define CXP_CARRIER_NUMBER  15
 
 #define PWL_MQ_PATH(x) \
     ((x == PWL_MQ_ID_CORE)        ? PWL_MQ_PATH_CORE : \
