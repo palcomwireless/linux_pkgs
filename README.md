@@ -120,3 +120,6 @@ To install services
 
 - version: 4.3.0
     - Modem CXP reboot feature
+
+- version: 4.3.1
+    - Modem CXP list update
