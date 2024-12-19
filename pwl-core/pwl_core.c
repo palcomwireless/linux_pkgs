@@ -522,6 +522,7 @@ static gboolean hw_reset() {
     int i = 0;
     int gpio;
 
+    // Check gpio export exist
     if(0 == access("/sys/class/gpio/export", F_OK)) {
         PWL_LOG_DEBUG("/sys/class/gpio/export exists");
     } else {
@@ -529,21 +530,18 @@ static gboolean hw_reset() {
         return -1;
     }
 
-    sprintf(system_cmd,"dmidecode -t 1 | grep SKU | awk -F ' ' '{print$3}'");
+    // Get SKU ID
+    sprintf(system_cmd, "dmidecode -t 1 | grep SKU | awk -F ' ' '{print$3}'");
     fp = popen(system_cmd, "r");
-    if(fp == NULL){
-        PWL_LOG_ERR("gpio reset system_cmd dmidecode error");
+    if (fp == NULL) {
+        PWL_LOG_ERR("[GPIO] gpio init system_cmd dmidecode error");
         return -1;
     }
 
-    ret = fread(SKU_id, sizeof(char), sizeof(SKU_id), fp);
-    if(ret <= 0){
-        PWL_LOG_ERR("gpio reset fread error");
-        return -1;
+    while (fgets(SKU_id, sizeof(SKU_id), fp) != NULL) {
+        SKU_id[strcspn(SKU_id, "\n")] = 0;
+        PWL_LOG_DEBUG("[GPIO] gpio reset SKU_id: %s", SKU_id);
     }
-
-    PWL_LOG_DEBUG("gpio reset SKU_id:%s", SKU_id);
-
     pclose(fp);
     fp = NULL;
 
@@ -557,22 +555,20 @@ static gboolean hw_reset() {
     }
 
     if(i == search_array_len){
-        PWL_LOG_ERR("gpio reset don't find skuid form table");
+        PWL_LOG_ERR("[GPIO] gpio reset don't find skuid form table");
         return -1;
     }
 
     // Disable gpio
-    if (set_gpio_status(0, gpio) != 0)
-    {
-        PWL_LOG_ERR("Disable GPIO error");
+    if (set_gpio_status(0, gpio) != 0) {
+        PWL_LOG_ERR("[GPIO] Disable GPIO error");
         return -1;
     }
     sleep(1);
 
     // Enable gpio
-    if (set_gpio_status(1, gpio) != 0)
-    {
-        PWL_LOG_ERR("Enable GPIO error");
+    if (set_gpio_status(1, gpio) != 0) {
+        PWL_LOG_ERR("[GPIO] Enable GPIO error");
         return -1;
     }
 
@@ -594,47 +590,47 @@ int set_gpio_status(int enable, int gpio) {
         return -1;
     }
 
-    fp = popen(gpio_cmd, "r");
+    if (DEBUG) PWL_LOG_DEBUG("[GPIO] gpio_cmd: %s", gpio_cmd);
+    fp = popen(gpio_cmd, "w");
     if (fp == NULL) {
         PWL_LOG_DEBUG("gpio cmd error");
         return -1;
     }
 
     pclose(fp);
+    fp = NULL;
     return 0;
 }
 
-int gpio_init()
-{
+int gpio_init() {
     FILE *fp = NULL;
     char system_cmd[64] = {0};
     char SKU_id[16];
+    char gpio_path[64] = {0};
     int search_array_len = sizeof(g_skuid_to_gpio) / sizeof(s_skuid_to_gpio);
     int i, gpio;
     int ret = -1;
 
-    if(0 == access("/sys/class/gpio/export", F_OK)) {
+    // Check gpio export exist
+    if (0 == access("/sys/class/gpio/export", F_OK)) {
         PWL_LOG_ERR("/sys/class/gpio/export exists");
     } else {
         PWL_LOG_ERR("/sys/class/gpio/export does not exist");
         return -1;
     }
 
+    // Get SKU ID
     sprintf(system_cmd, "dmidecode -t 1 | grep SKU | awk -F ' ' '{print$3}'");
     fp = popen(system_cmd, "r");
-    if(fp == NULL){
-        PWL_LOG_ERR("gpio init system_cmd dmidecode error");
+    if (fp == NULL) {
+        PWL_LOG_ERR("[GPIO] gpio init system_cmd dmidecode error");
         return -1;
     }
 
-    ret = fread(SKU_id, sizeof(char), sizeof(SKU_id), fp);
-    if(ret <= 0){
-        PWL_LOG_ERR("gpio init fread error");
-        pclose(fp);
-        return -1;
+    while (fgets(SKU_id, sizeof(SKU_id), fp) != NULL) {
+        SKU_id[strcspn(SKU_id, "\n")] = 0;
+        PWL_LOG_DEBUG("[GPIO] gpio init SKU_id: %s", SKU_id);
     }
-
-    PWL_LOG_DEBUG("gpio init SKU_id:%s", SKU_id);
     pclose(fp);
     fp = NULL;
 
@@ -647,33 +643,46 @@ int gpio_init()
         }
     }
 
-    if(i == search_array_len)
-    {
-        PWL_LOG_ERR("gpio init don't find skuid form table");
+    if (i == search_array_len) {
+        PWL_LOG_ERR("[GPIO] gpio init don't find skuid form table");
         return -1;
     }
 
-    sprintf(system_cmd, "echo %d > /sys/class/gpio/export", gpio);
-    fp = popen(system_cmd, "w");
-    if(fp == NULL){
-        PWL_LOG_ERR("gpio init system_cmd gpio export error");
-        return -1;
-    }
+    if (DEBUG) PWL_LOG_DEBUG("[GPIO] SKU ID: %s, GPIO: %d", SKU_id, gpio);
 
-    if (set_gpio_status(1, gpio) != 0)
-    {
-        PWL_LOG_ERR("gpio init system_cmd gpio value error");
-        return -1;
+    // Export gpio and enable
+    memset(gpio_path, 0, sizeof(gpio_path));
+    sprintf(gpio_path, "/sys/class/gpio/gpio%d", gpio);
+
+    if (0 == access(gpio_path, F_OK)) {
+        PWL_LOG_DEBUG("[GPIO] GPIO already export, continue init process.");
+    } else {
+        PWL_LOG_DEBUG("[GPIO] GPIO not export yet, start export %d", gpio);
+        sprintf(system_cmd, "echo %d > /sys/class/gpio/export", gpio);
+        fp = popen(system_cmd, "w");
+        if (fp == NULL) {
+            PWL_LOG_ERR("[GPIO] gpio init system_cmd gpio export error");
+            return -1;
+        }
+        pclose(fp);
+        fp = NULL;
     }
 
     sprintf(system_cmd, "echo out > /sys/class/gpio/gpio%d/direction", gpio);
-    ret = fwrite(system_cmd, sizeof(char), strlen(system_cmd) + 1, fp);
-    if (ret == 0) {
-        PWL_LOG_ERR("gpio init system_cmd set gpio direction error");
+    if (DEBUG) PWL_LOG_DEBUG("[GPIO] system_cmd: %s", system_cmd);
+    fp = popen(system_cmd, "w");
+    if (fp == NULL) {
+        PWL_LOG_ERR("[GPIO] gpio init system_cmd set gpio direction error");
         return -1;
     }
     pclose(fp);
     fp = NULL;
+
+    // Enable GPIO
+    if (set_gpio_status(1, gpio) != 0) {
+        PWL_LOG_ERR("[GPIO] gpio init system_cmd gpio value error");
+        return -1;
+    }
     return 0;
 }
 
