@@ -123,3 +123,6 @@ To install services
 
 - version: 4.3.1
     - Modem CXP list update
+
+- version: 4.3.2
+    - Enhance GPIO reset and update reset control table
