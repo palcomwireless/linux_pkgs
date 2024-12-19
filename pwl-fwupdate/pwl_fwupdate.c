@@ -1452,8 +1452,10 @@ int download_process( void *argu_ptr )
         fdtl_data->download_process_state = DOWNLOAD_FAILED;
         fdtl_data->error_code = SWITCHING_TO_DOWNLOAD_MODE_FAILED;
         g_usleep(1000*1000*3);
-        pclose(g_progress_fp);
-        g_progress_fp = NULL;
+        if (g_progress_fp != NULL) {
+            pclose(g_progress_fp);
+            g_progress_fp = NULL;
+        }
         return SWITCHING_TO_DOWNLOAD_MODE_FAILED;
     }
     //elapsed_time = get_time_info(0) - raw_time;
@@ -1648,8 +1650,10 @@ int download_process( void *argu_ptr )
     update_progress_dialog(1, "Exit download process.", "#The Modem update Success!\\n\\n\n");
     g_usleep(1000*1000*3);
     update_progress_dialog(1, "Exit download process.", "#The Modem update Success!\\n\\n\n");
-    pclose(g_progress_fp);
-    g_progress_fp = NULL;
+    if (g_progress_fp != NULL) {
+        pclose(g_progress_fp);
+        g_progress_fp = NULL;
+    }
     fdtl_data->download_process_state = DOWNLOAD_COMPLETED;
     fdtl_data->error_code = 1;
     return 1;
@@ -2812,8 +2816,10 @@ int start_update_process(gboolean is_startup)
             g_usleep(1000*1000*3);
             update_progress_dialog(100, "Finish update.", "#Modem firmware is up to date\\n\\n\n");
         }
-        pclose(g_progress_fp);
-        g_progress_fp = NULL;
+        if (g_progress_fp != NULL) {
+            pclose(g_progress_fp);
+            g_progress_fp = NULL;
+        }
         return -1;
     }
 
@@ -2849,8 +2855,10 @@ int start_update_process(gboolean is_startup)
             update_progress_dialog(1, "Reset", "#Modem download error, will automatically retry later\\n\\n\n");
             g_usleep(1000*1000*3);
             update_progress_dialog(1, "Reset", "#Modem download error, will automatically retry later\\n\\n\n");
-            pclose(g_progress_fp);
-            g_progress_fp = NULL;
+            if (g_progress_fp != NULL) {
+                pclose(g_progress_fp);
+                g_progress_fp = NULL;
+            }
         }
         if (gpio_reset) {
             set_fw_update_status_value(NEED_RETRY_FW_UPDATE, 1);
