@@ -121,6 +121,20 @@ typedef struct {
     signal_notice_module_recovery_finish_callback callback_notice_module_recovery_finish;
 } signal_callback_t;
 
+typedef enum {
+    OEMPRI_SAME_VERSION      = 0,
+    OEMPRI_UPDATE_SUCCESS    = 1,
+    OEMPRI_OPEN_RFS_FAIL     = 2,
+    OEMPRI_READ_RFS_FAIL     = 3,
+    OEMPRI_SEEK_RFS_FAIL     = 4,
+    OEMPRI_CHECK_CRC_FAIL    = 5,
+    OEMPRI_WRITE_EFS_FAIL    = 6,
+    OEMPRI_WRITE_EFS_WRONG   = 7,
+    OEMPRI_READ_RFS_ABNORMAL = 8,
+    OEMPRI_READ_QCN_FAIL     = 9,
+    OEMPRI_READ_MAX          = 10
+} oempri_read_cause_e_type;
+
 int start_update_process(gboolean is_startup);
 gint set_preferred_carrier();
 gint del_tune_code();
@@ -130,6 +144,11 @@ char *get_test_sku_id();
 void signal_callback_retry_fw_update(const gchar* arg);
 void registerSignalCallback(signal_callback_t *callback);
 int get_oem_version_from_file(char *oem_file_name, char *oem_version);
+int check_oempri_reset_state();
+int get_oempri_reset_state(char *response);
+int get_module_sku_id();
+int parse_sku_id(char *response, char *module_sku_id);
+int clean_oem_pri_version();
 
 // For pcie device
 xmlXPathObjectPtr get_node_set (xmlDocPtr doc, xmlChar *xpath);
