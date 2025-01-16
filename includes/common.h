@@ -144,6 +144,7 @@ typedef enum {
     PWL_CID_GET_ATE,
     PWL_CID_GET_ATI,
     PWL_CID_GET_FW_VER,
+    PWL_CID_GET_MODULE_SKU_ID,
     PWL_CID_SWITCH_TO_FASTBOOT,
     PWL_CID_CHECK_OEM_PRI_VERSION,
     PWL_CID_GET_PREF_CARRIER,
@@ -163,7 +164,9 @@ typedef enum {
     PWL_CID_GET_PCIE_OEM_VERSION,
     PWL_CID_GET_PCIE_DPV_VERSION,
     PWL_CID_GET_CARRIER_ID,
+    PWL_CID_GET_OEM_PRI_RESET_STATE,
     PWL_CID_MADPT_RESTART,
+    PWL_CID_SETUP_JP_FCC_CONFIG,
     PLW_CID_MAX_MADPT,
     PWL_CID_MAX
 } pwl_cid_t;
@@ -176,6 +179,7 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_CARRIER_VER] = "GET_CARRIER_VER",
     [PWL_CID_GET_OEM_VER] = "GET_OEM_VER",
     [PWL_CID_UPDATE_FW_VER] = "UPDATE_FW_VER",
+    [PWL_CID_GET_MODULE_SKU_ID] = "GET_MODULE_SKU_ID",
     [PWL_CID_GET_SIM_CARRIER] = "GET_SIM_CARRIER",
     [PWL_CID_GET_MD_VER] = "GET_MD_VER",
     [PWL_CID_GET_OP_VER] = "GET_OP_VER",
@@ -205,7 +209,9 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_PCIE_OEM_VERSION] = "GET_PCIE_OEM_VERSION",
     [PWL_CID_GET_PCIE_DPV_VERSION] = "GET_PCIE_DPV_VERSION",
     [PWL_CID_GET_CARRIER_ID] = "GET_CARRIER_ID",
+    [PWL_CID_GET_OEM_PRI_RESET_STATE] = "GET_OEM_PRI_RESET_STATE",
     [PWL_CID_MADPT_RESTART] = "MADPT_RESTART",
+    [PWL_CID_SETUP_JP_FCC_CONFIG] = "SETUP_JP_FCC_CONFIG",
 };
 
 typedef enum {
@@ -287,5 +293,5 @@ int count_int_length(unsigned x);
 int read_config_from_file(char *file_name, char*key, int *value);
 int get_fwupdate_subsysid(char *subsysid);
 int remove_folder(char *path);
-
+void trim_string(char *string);
 #endif
