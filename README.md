@@ -126,3 +126,7 @@ To install services
 
 - version: 4.3.2
     - Enhance GPIO reset and update reset control table
+
+- version: 4.3.3
+    - Implement modem recovery state check
+    - Firmware update flow tuning
