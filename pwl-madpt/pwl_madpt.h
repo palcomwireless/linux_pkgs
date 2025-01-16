@@ -37,8 +37,8 @@
 #define OEM_PRI_RESET_NO_NEED_UPDATE    9  // trigger modem reboot
 
 gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size);
-void jp_fcc_config();
+void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem);
 void restart();
 void mbim_error_check();
-
+void enable_jp_fcc_auto_reboot();
 #endif

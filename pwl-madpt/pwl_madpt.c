@@ -38,6 +38,7 @@ gchar* at_cmd_map[] = {
     "ate",
     "ati",
     "at*bfwver",
+    "at*bsku?",
     "at*bboothold",
     "at*bpriid?",
     "at*bimpref?",
@@ -56,7 +57,8 @@ gchar* at_cmd_map[] = {
     "at*copid?",
     "at*coemid?",
     "at*cdpvid?",
-    "at+esbp?"
+    "at+esbp?",
+    "at*mresetoempri=1"
 };
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -341,7 +343,7 @@ static gpointer msg_queue_thread_func(gpointer data) {
     attr.mq_maxmsg = PWL_MQ_MAX_MSG;
     attr.mq_msgsize = sizeof(message);
     attr.mq_curmsgs = 0;
-
+    gboolean has_flash_oem_img = FALSE;
     /* create the message queue */
     mq = mq_open(PWL_MQ_PATH_MADPT, O_CREAT | O_RDONLY, 0644, &attr);
 
@@ -358,7 +360,13 @@ static gpointer msg_queue_thread_func(gpointer data) {
         memset(g_response, 0, PWL_MQ_MAX_RESP);
 
         if (message.pwl_cid == PWL_CID_MADPT_RESTART) {
-            jp_fcc_config(TRUE);
+            has_flash_oem_img = FALSE;
+            if (strcmp(message.content, "TRUE") == 0)
+                has_flash_oem_img = TRUE;
+            else
+               has_flash_oem_img = FALSE;
+            PWL_LOG_INFO("Has flash oem pri image: %d", has_flash_oem_img);
+            jp_fcc_config(FALSE, has_flash_oem_img);
             timedwait = FALSE;
         } else if (message.pwl_cid == PWL_CID_SET_PREF_CARRIER) { 
             if (DEBUG) PWL_LOG_DEBUG("PWL_CID_SET_PREF_CARRIER");
@@ -396,6 +404,9 @@ static gpointer msg_queue_thread_func(gpointer data) {
 
             status = at_cmd_request(cust_set_cmd);
             free(cust_set_cmd);
+        } else if (message.pwl_cid == PWL_CID_SETUP_JP_FCC_CONFIG) {
+            enable_jp_fcc_auto_reboot();
+            timedwait = FALSE;
         } else {
             status = at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(message.pwl_cid)]);
         }
@@ -507,6 +518,21 @@ static gpointer msg_queue_thread_func(gpointer data) {
                     send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, "");
                 }
                 break;
+            case PWL_CID_GET_OEM_PRI_RESET_STATE:
+                PWL_LOG_DEBUG("PWL_CID_GET_OEM_PRI_RESET_STATE, g_response: %s", g_response);
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_GET_MODULE_SKU_ID:
+                if (strlen(g_response) > 0) {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                } else {
+                    PWL_LOG_ERR("Can't get module SKU ID");
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, PWL_CID_STATUS_ERROR, g_response);
+                }
+                break;
+            case PWL_CID_SETUP_JP_FCC_CONFIG:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, "");
+                break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
                 break;
@@ -523,7 +549,7 @@ static gpointer jp_fcc_thread_func(gpointer data) {
     if (jp_fcc_config_retry > 0 && jp_fcc_config_retry < JP_FCC_CONFIG_RETRY_TH) {
         jp_fcc_config_retry++;
         set_fw_update_status_value(JP_FCC_CONFIG_COUNT, jp_fcc_config_retry);
-        jp_fcc_config(FALSE);
+        jp_fcc_config(TRUE, FALSE);
     } else {
         PWL_LOG_INFO("wait for modem to get ready");
         sleep(PWL_MBIM_READY_SEC);
@@ -534,6 +560,7 @@ static gpointer jp_fcc_thread_func(gpointer data) {
 }
 
 void enable_jp_fcc_auto_reboot() {
+    PWL_LOG_DEBUG("Enable JP FCC auto reboot");
     // enable this flag so modem will do switch when sim changed to corresponding carrier
     pwl_get_enable_state_t state = PWL_CID_GET_ENABLE_STATE_ERROR;
 
@@ -560,6 +587,7 @@ void enable_jp_fcc_auto_reboot() {
 
             } else if (state == PWL_CID_GET_ENABLE_STATE_ENABLED) {
                 PWL_LOG_INFO("JP fcc auto reboot state enabled");
+                set_fw_update_status_value(JP_FCC_CONFIG_COUNT, 0);
                 return;
             }
             sleep(1);
@@ -570,8 +598,8 @@ void enable_jp_fcc_auto_reboot() {
 void wait_for_modem_oem_pri_reset() {
     gint oem_reset_state = OEM_PRI_RESET_NOT_READY;
 
-    for (gint i = 0; i < PWL_OEM_PRI_RESET_RETRY; i++) {
-        sleep(1);
+    for (gint i = 0; i < 20; i++) {
+        sleep(3);
         madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_RESET)]);
 
         if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
@@ -593,7 +621,7 @@ void wait_for_modem_oem_pri_reset() {
     }
 }
 
-void jp_fcc_config() {
+void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem) {
     gboolean is_mbim_ready = FALSE;
     // just after flash, wait a bit for modem to get ready
     PWL_LOG_INFO("wait for modem to get ready");
@@ -625,60 +653,61 @@ void jp_fcc_config() {
 
     sleep(5); // immediatly use of mbim will cause error, wait a bit
 
-    enable_jp_fcc_auto_reboot();
+    if (enable_jp_fcc)
+        enable_jp_fcc_auto_reboot();
 
     // Check oem pri info:
     // START(0)/NORESET(3) > do nothing
     // INIT(1) > wait
     // REST(2) > reset module
-    gint retry = 0;
-    while (g_oem_pri_state != OEM_PRI_UPDATE_NORESET) {
-        if (retry > 10) break; // retry wait for OEM_PRI_UPDATE_RESET for 50s then exit
+    if (has_flash_oem) {
+        gint retry = 0;
+        while (g_oem_pri_state != OEM_PRI_UPDATE_NORESET) {
+            if (retry > 10) break;  // retry wait for OEM_PRI_UPDATE_RESET for 50s then exit
 
-        PWL_LOG_DEBUG("===== Get OEM pri info =====, def: %d", g_oem_pri_state);
-        madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_INFO)]);
-        sleep(5);
-        retry++;
-        g_oem_pri_state = atoi(g_response);
-        PWL_LOG_DEBUG("===== OEM info int: %d", g_oem_pri_state);
-        if (g_oem_pri_state == OEM_PRI_UPDATE_START || g_oem_pri_state == OEM_PPI_UPDATE_INIT) {
-            continue;
-        } else if (g_oem_pri_state == OEM_PRI_UPDATE_RESET) {
-            PWL_LOG_DEBUG("===== Oem pri need reset =====");
-            wait_for_modem_oem_pri_reset();
-            break;
+            PWL_LOG_DEBUG("===== Get OEM pri info =====, def: %d", g_oem_pri_state);
+            madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_INFO)]);
+            sleep(5);
+            retry++;
+            g_oem_pri_state = atoi(g_response);
+            PWL_LOG_DEBUG("===== OEM info int: %d", g_oem_pri_state);
+            if (g_oem_pri_state == OEM_PRI_UPDATE_START || g_oem_pri_state == OEM_PPI_UPDATE_INIT) {
+                continue;
+            } else if (g_oem_pri_state == OEM_PRI_UPDATE_RESET) {
+                PWL_LOG_DEBUG("===== Oem pri need reset =====");
+                wait_for_modem_oem_pri_reset();
+                break;
+            } else {
+                continue;
+            }
+        }
+        PWL_LOG_DEBUG("===== OEM info check END =====");
+
+        for (int i = 0; i < 5; i++) {
+            madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_RESET)]);
+            if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+                PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_RESET]);
+            } else {
+                break;
+            }
+        }
+
+        // wait till mbim port gone
+        for (int i = 0; i < 10; i++) {
+            gchar port[20];
+            memset(port, 0, sizeof(port));
+            if (!pwl_find_mbim_port(port, sizeof(port))) {
+                break;
+            }
+            sleep(2);
+        }
+        PWL_LOG_INFO("mbim port gone now");
+
+        if (pwl_mbimdeviceadpt_port_wait()) {
+            PWL_LOG_INFO("mbim port available now");
         } else {
-            continue;
+            PWL_LOG_INFO("mbim port still not available after wait");
         }
-    }
-    PWL_LOG_DEBUG("===== OEM info check END =====");
-
-    for (int i = 0; i < 5; i++) {
-        madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_RESET)]);
-        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
-            PWL_LOG_ERR("timed out or error for cid %s", cid_name[PWL_CID_RESET]);
-        } else {
-            break;
-        }
-    }
-
-    set_fw_update_status_value(JP_FCC_CONFIG_COUNT, 0);
-
-    // wait till mbim port gone
-    for (int i = 0; i < 10; i++) {
-        gchar port[20];
-        memset(port, 0, sizeof(port));
-        if (!pwl_find_mbim_port(port, sizeof(port))) {
-            break;
-        }
-        sleep(2);
-    }
-    PWL_LOG_INFO("mbim port gone now");
-
-    if (pwl_mbimdeviceadpt_port_wait()) {
-        PWL_LOG_INFO("mbim port available now");
-    } else {
-        PWL_LOG_INFO("mbim port still not available after wait");
     }
 
     restart();
