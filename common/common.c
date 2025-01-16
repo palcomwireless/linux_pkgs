@@ -17,7 +17,7 @@
 
 #include <mqueue.h>
 #include <stdio.h>
-
+#include <ctype.h>
 #include "common.h"
 #include "log.h"
 
@@ -757,4 +757,13 @@ int remove_folder(char *path) {
     ret = fgets(buffer, sizeof(buffer), fp);
     pclose(fp);
     return RET_OK;
+}
+
+void trim_string(char *string) {
+    // Trim right space
+    while (isspace(string[0])) {
+        memmove(string, string + 1, strlen(string));
+    }
+    // Trim left space
+    string[strcspn(string, " ")] = 0;
 }
