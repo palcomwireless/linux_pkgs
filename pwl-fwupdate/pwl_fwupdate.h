@@ -172,5 +172,8 @@ int do_fastboot_reboot();
 gint get_carrier_id();
 gint get_cxp_reboot_flag();
 void remove_flash_data(int type);
+void update_esim_enable_state(char *esim_state);
+int get_esim_enable_state();
+
 
 #endif

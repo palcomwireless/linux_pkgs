@@ -182,6 +182,7 @@ int  g_update_type = 0;
 int  g_update_based_type = 0;
 int  g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
 char g_dpv_image_checksum[MAX_CHECKSUM_LEN] = {0};
+gboolean g_esim_enable = TRUE;  // Default esim is enable
 
 #define GET_KEY_FROM_IMAGE 
 
@@ -763,6 +764,11 @@ void* msg_queue_thread_func() {
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_SETUP_JP_FCC_CONFIG:
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_ESIM_STATE:
+                PWL_LOG_DEBUG("[ESIM] %s", message.response);
+                update_esim_enable_state(message.response);
                 pthread_cond_signal(&g_cond);
                 break;
             default:
@@ -2199,6 +2205,10 @@ gint get_current_fw_version()
             PWL_LOG_ERR("Get DPV version error, abort!");
             return RET_FAILED;
         }
+
+        // Update esim enable state
+        get_esim_enable_state();
+
         if (DEBUG) {
             PWL_LOG_DEBUG("In get_current_fw_version, get version:");
             PWL_LOG_DEBUG("AP version: %s", g_current_fw_ver);
@@ -2206,6 +2216,7 @@ gint get_current_fw_version()
             PWL_LOG_DEBUG("OP version: %s", g_current_op_ver);
             PWL_LOG_DEBUG("OEM version: %s", g_current_oem_ver);
             PWL_LOG_DEBUG("DPV version: %s", g_current_dpv_ver);
+            PWL_LOG_DEBUG("ESIM enabled: %d", g_esim_enable);
         }
         return RET_OK;
     }
@@ -2472,6 +2483,51 @@ int get_oem_version_from_file(char *oem_file_name, char *oem_version) {
         strcpy(oem_version, sar_tuner_ver);
     }
     return 0;
+}
+
+void update_esim_enable_state(char *esim_state) {
+    if (DEBUG) PWL_LOG_DEBUG("[DPV] ESIM state: %s", esim_state);
+
+    char temp_str[50] = {0};
+    char *token;
+
+    memset(temp_str, 0, sizeof(temp_str));
+    strcpy(temp_str, esim_state);
+
+    token = strtok(temp_str, " ");
+    while (token != NULL) {
+        if (strcmp(token, "0") == 0) {
+            g_esim_enable = FALSE;
+            set_bootup_status_value(ESIM_ENABLE_STATE, 0);
+            break;
+        }
+
+        if (strcmp(token, "1") == 0) {
+            g_esim_enable = TRUE;
+            set_bootup_status_value(ESIM_ENABLE_STATE, 1);
+            break;
+        }
+        token = strtok(NULL, " ");
+    }
+}
+
+int get_esim_enable_state() {
+    int err, retry = 0;
+
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        err = 0;
+        send_message_queue(PWL_CID_GET_ESIM_STATE);
+        if (!cond_wait(&g_mutex, &g_cond, PWL_CMD_TIMEOUT_SEC)) {
+            PWL_LOG_ERR("Time out or error to get esim state, retry");
+            err = 1;
+        }
+        if (err) {
+            retry++;
+            continue;
+        }
+        return RET_OK;
+    }
+    return RET_FAILED;
 }
 
 gint setup_download_parameter(fdtl_data_t  *fdtl_data)
@@ -3745,44 +3801,85 @@ int find_device_image(char *sku_id) {
             }
             xmlFree(prod_node);
 
+            if (DEBUG) PWL_LOG_DEBUG("[DPV] ProductID: %s", prod_id);
+
             if (strcmp(sku_id, prod_id) == 0) {
                 xmlChar *dev_node = xmlGetProp(temp_node, "DevID");
-                sprintf(image_name, "%s.img", dev_node);
-                find_image_file_path(image_name, UNZIP_FOLDER_DVP, image_path);
+                xmlChar *esim_node = xmlGetProp(temp_node, "Esim");
 
-                if (DEBUG) PWL_LOG_DEBUG("Dev image: %s", image_path);
-                if (DEBUG) PWL_LOG_DEBUG("current dpv: %s, flz dpv: %s", g_current_dpv_ver, dev_node);
-                xmlFree(dev_node);
+                PWL_LOG_DEBUG("[DPV] ESIM: %s, g_esim_enable: %d", esim_node, g_esim_enable);
 
-                // Get checksum for Device package image
-                memset(g_dpv_image_checksum, 0, sizeof(g_dpv_image_checksum));
-                if (CHECK_CHECKSUM) {
-                    if (parse_checksum(DPV_CHECKSUM_PATH, image_name, g_dpv_image_checksum) != RET_OK) {
-                        PWL_LOG_ERR("Parse checksum of device package image error!");
-                        return RET_FAILED;
-                    }
+                if (esim_node == NULL) {
+                    PWL_LOG_INFO("[DPV] Can't get esim tag from xml, set as default enable");
+                    sprintf(image_name, "%s.img", dev_node);
+                    find_image_file_path(image_name, UNZIP_FOLDER_DVP, image_path);
+                    xmlFree(dev_node);
+                    break;
                 }
-                if (CHECK_DPV_VERSION) {
-                    if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
-                        dev_node = xmlGetProp(temp_node, "DevID");
-                        if (strncmp(g_current_dpv_ver, dev_node, strlen(g_current_dpv_ver)) == 0) {
-                            sprintf(g_pcie_download_image_list[g_pcie_img_number_count], "SKIP_%s", image_path);
-                        } else {
-                            strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
-                        }
-                        xmlFree(dev_node);
-                    } else {
-                        strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
-                    }
+
+                if (g_esim_enable == TRUE && strcmp(esim_node, "Enable") == 0) {
+                    sprintf(image_name, "%s.img", dev_node);
+                    find_image_file_path(image_name, UNZIP_FOLDER_DVP, image_path);
+                    PWL_LOG_DEBUG("DPV image: %s", image_path);
+                    xmlFree(dev_node);
+                    xmlFree(esim_node);
+                    break;
+                } else if (g_esim_enable == TRUE && strcmp(esim_node, "Disable") == 0) {
+                    PWL_LOG_DEBUG("[DPV] ProductID match but Esim is Disable, SKIP");
+                    continue;
+                } else if (g_esim_enable == FALSE && strcmp(esim_node, "Enable") == 0) {
+                    PWL_LOG_DEBUG("[DPV] ProductID match but Esim is Enable, SKIP");
+                    continue;
+                } else if (g_esim_enable == FALSE && strcmp(esim_node, "Disable") == 0) {
+                    sprintf(image_name, "%s.img", dev_node);
+                    find_image_file_path(image_name, UNZIP_FOLDER_DVP, image_path);
+                    PWL_LOG_DEBUG("DPV image: %s", image_path);
+                    xmlFree(dev_node);
+                    xmlFree(esim_node);
+                    break;
                 } else {
-                    strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+                    continue;
                 }
-                // strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
-                g_pcie_img_number_count++;
-                break;
             }
         }
     }
+
+    PWL_LOG_DEBUG("[DPV] Verify if DPV image exist.");
+    if (strlen(image_path) > 0)
+        PWL_LOG_INFO("[DPV] DPV img: %s", image_path);
+    else {
+        PWL_LOG_ERR("[DPV] Can't find DPV image, abort!");
+        xmlXPathFreeObject(xpath_sku_id_obj);
+        xmlFreeDoc(doc);
+        PWL_LOG_ERR("[DPV] Can't find DPV image, abort!");
+        return RET_FAILED;
+    }
+
+    memset(g_dpv_image_checksum, 0, sizeof(g_dpv_image_checksum));
+    if (CHECK_CHECKSUM) {
+        if (parse_checksum(DPV_CHECKSUM_PATH, image_name, g_dpv_image_checksum) != RET_OK) {
+            PWL_LOG_ERR("Parse checksum of device package image error!");
+            xmlXPathFreeObject(xpath_sku_id_obj);
+            xmlFreeDoc(doc);
+            return RET_FAILED;
+        }
+    }
+
+    if (CHECK_DPV_VERSION) {
+        if (g_update_based_type == PCIE_UPDATE_BASE_FLZ) {
+            if (strncmp(g_current_dpv_ver, image_name, strlen(g_current_dpv_ver)) == 0) {
+                sprintf(g_pcie_download_image_list[g_pcie_img_number_count], "SKIP_%s", image_path);
+            } else {
+                strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+            }
+        } else {
+            strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+        }
+    } else {
+        strcpy(g_pcie_download_image_list[g_pcie_img_number_count], image_path);
+    }
+    g_pcie_img_number_count++;
+
     xmlXPathFreeObject(xpath_sku_id_obj);
     xmlFreeDoc(doc);
     return RET_OK;
@@ -4437,7 +4534,7 @@ int switch_t7xx_mode(char *mode) {
 
 int start_update_process_pcie(gboolean is_startup, int based_type) {
     g_update_based_type = based_type;
-
+    int esim_state = -1;
     // Init fw update status file
     if (fw_update_status_init() == 0) {
         // get_fw_update_status_value(FIND_FASTBOOT_RETRY_COUNT, &g_check_fastboot_retry_count);
@@ -4447,6 +4544,12 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
         get_fw_update_status_value(DO_HW_RESET_COUNT, &g_do_hw_reset_count);
         get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &g_need_retry_fw_update);
     }
+    // Get esim state from file
+    get_bootup_status_value(ESIM_ENABLE_STATE, &esim_state);
+    if (esim_state == 1)
+        g_esim_enable = TRUE;
+    else
+        g_esim_enable = FALSE;
 
     if (g_fw_update_retry_count > FW_UPDATE_RETRY_TH || g_do_hw_reset_count > HW_RESET_RETRY_TH) {
         PWL_LOG_ERR("Reached retry threadshold!!! stop firmware update!!! (%d,%d)", g_fw_update_retry_count, g_do_hw_reset_count);
@@ -4660,35 +4763,57 @@ int do_fastboot_reboot() {
 
 int check_update_data(int check_type) {
     int update_type = 0;
-    // Check which type udpate
-    if (check_type == TYPE_FLASH_FLZ) {
-        if (access(UPDATE_FW_FLZ_FILE, F_OK) == 0 &&
-            access(UPDATE_DEV_FLZ_FILE, F_OK) == 0) {
-            update_type = UPDATE_TYPE_FULL;
-        } else if (access(UPDATE_FW_FLZ_FILE, F_OK) == 0 &&
-                   access(UPDATE_DEV_FLZ_FILE, F_OK) != 0) {
-            update_type = UPDATE_TYPE_ONLY_FW;
-        } else if (access(UPDATE_FW_FLZ_FILE, F_OK) != 0 &&
-                   access(UPDATE_DEV_FLZ_FILE, F_OK) == 0) {
-            update_type = UPDATE_TYPE_ONLY_DEV;
+
+    int ret = RET_OK;
+    int retry = 0;
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        ret = RET_OK;
+        // Check which type udpate
+        if (check_type == TYPE_FLASH_FLZ) {
+            if (access(UPDATE_FW_FLZ_FILE, F_OK) == 0 &&
+                access(UPDATE_DEV_FLZ_FILE, F_OK) == 0) {
+                update_type = UPDATE_TYPE_FULL;
+            } else if (access(UPDATE_FW_FLZ_FILE, F_OK) == 0 &&
+                       access(UPDATE_DEV_FLZ_FILE, F_OK) != 0) {
+                update_type = UPDATE_TYPE_ONLY_FW;
+            } else if (access(UPDATE_FW_FLZ_FILE, F_OK) != 0 &&
+                       access(UPDATE_DEV_FLZ_FILE, F_OK) == 0) {
+                update_type = UPDATE_TYPE_ONLY_DEV;
+            } else {
+                PWL_LOG_ERR("Failed to parse flz image update type (%d,%d)!!!",
+                             access(UPDATE_FW_FLZ_FILE, F_OK),
+                             access(UPDATE_DEV_FLZ_FILE, F_OK));
+                ret = RET_FAILED;
+            }
+        } else if (check_type == TYPE_FLASH_FOLDER) {
+            if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 &&
+                access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
+                update_type = UPDATE_TYPE_FULL;
+            } else if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 &&
+                       access(UPDATE_DEV_FOLDER_FILE, F_OK) != 0) {
+                update_type = UPDATE_TYPE_ONLY_FW;
+            } else if (access(UPDATE_FW_FOLDER_FILE, F_OK) != 0 &&
+                       access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
+                update_type = UPDATE_TYPE_ONLY_DEV;
+            } else {
+                PWL_LOG_ERR("Failed to parse image folder update type (%d, %d)!!!",
+                             access(UPDATE_FW_FOLDER_FILE, F_OK),
+                             access(UPDATE_DEV_FOLDER_FILE, F_OK));
+                ret = RET_FAILED;
+            }
         } else {
-            return RET_FAILED;
+            PWL_LOG_ERR("Check type abnormal, abort");
+            ret = RET_FAILED;
         }
-    } else if (check_type == TYPE_FLASH_FOLDER) {
-        if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 &&
-            access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
-            update_type = UPDATE_TYPE_FULL;
-        } else if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 &&
-                   access(UPDATE_DEV_FOLDER_FILE, F_OK) != 0) {
-            update_type = UPDATE_TYPE_ONLY_FW;
-        } else if (access(UPDATE_FW_FOLDER_FILE, F_OK) != 0 &&
-                   access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
-            update_type = UPDATE_TYPE_ONLY_DEV;
+        if (ret == RET_OK) {
+            break;
         } else {
-            return RET_FAILED;
+            PWL_LOG_ERR("retry image type check");
+            retry++;
+            sleep(2);
         }
-    } else {
-        PWL_LOG_ERR("Check type abnormal, abort");
+    }
+    if (ret != RET_OK) {
         return RET_FAILED;
     }
 
