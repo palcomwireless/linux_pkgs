@@ -130,3 +130,6 @@ To install services
 - version: 4.3.3
     - Implement modem recovery state check
     - Firmware update flow tuning
+
+- version: 4.3.4
+    - Fix eSIM enabled issue
