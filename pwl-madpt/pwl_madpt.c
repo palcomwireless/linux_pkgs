@@ -58,7 +58,8 @@ gchar* at_cmd_map[] = {
     "at*coemid?",
     "at*cdpvid?",
     "at+esbp?",
-    "at*mresetoempri=1"
+    "at*mresetoempri=1",
+    "at+esimenable?"
 };
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -123,7 +124,11 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
             if (strstr(rsp, "RMM-") ||
                 strstr(rsp, "OP.") ||
                 strstr(rsp, "OEM.") ||
-                strstr(rsp, "DPV")) {
+                strstr(rsp, "DPV") ||
+                strstr(rsp, "ESIM")) {
+                if (strstr(rsp, "ESIM")) {
+                    start = strstr(rsp, "ESIM");
+                }
                 strcpy(pcie_buffer, start);
                 pcie_buffer[strcspn(pcie_buffer, "\n")] = 0;
                 memset(buff_ptr, 0, strlen(pcie_buffer));
@@ -532,6 +537,10 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 break;
             case PWL_CID_SETUP_JP_FCC_CONFIG:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, "");
+                break;
+            case PWL_CID_GET_ESIM_STATE:
+                PWL_LOG_DEBUG("[DPV] esim: %s", g_response);
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
