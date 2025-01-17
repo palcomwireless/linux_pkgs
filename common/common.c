@@ -615,6 +615,7 @@ int bootup_status_init() {
             return -1;
         }
         fprintf(fp, "Bootup_failure_count=0\n");
+        fprintf(fp, "esim_enable=1\n");
         fclose(fp);
     }
     return 0;
