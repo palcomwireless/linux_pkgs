@@ -46,6 +46,7 @@
 #define NEED_RETRY_FW_UPDATE            "Need_retry_fw_update"
 #define JP_FCC_CONFIG_COUNT             "jp_fcc_config_count"
 #define BOOTUP_FAILURE_COUNT            "Bootup_failure_count"
+#define ESIM_ENABLE_STATE               "esim_enable"
 
 #define DEVICE_PACKAGE_VERSION_LENGTH   15
 #define FW_UPDATE_RETRY_TH              1
@@ -165,6 +166,7 @@ typedef enum {
     PWL_CID_GET_PCIE_DPV_VERSION,
     PWL_CID_GET_CARRIER_ID,
     PWL_CID_GET_OEM_PRI_RESET_STATE,
+    PWL_CID_GET_ESIM_STATE,
     PWL_CID_MADPT_RESTART,
     PWL_CID_SETUP_JP_FCC_CONFIG,
     PLW_CID_MAX_MADPT,
@@ -210,6 +212,7 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_PCIE_DPV_VERSION] = "GET_PCIE_DPV_VERSION",
     [PWL_CID_GET_CARRIER_ID] = "GET_CARRIER_ID",
     [PWL_CID_GET_OEM_PRI_RESET_STATE] = "GET_OEM_PRI_RESET_STATE",
+    [PWL_CID_GET_ESIM_STATE] = "GET_ESIM_STATE",
     [PWL_CID_MADPT_RESTART] = "MADPT_RESTART",
     [PWL_CID_SETUP_JP_FCC_CONFIG] = "SETUP_JP_FCC_CONFIG",
 };
