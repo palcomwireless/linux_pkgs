@@ -29,6 +29,7 @@
 #define PWL_OPEN_MBIM_TIMEOUT_SEC       30
 #define PWL_CLOSE_MBIM_TIMEOUT_SEC      5
 #define PWL_MBIM_READY_SEC              15
+#define PWL_RECOVERY_CHECK_DELAY_SEC    60
 
 #define INFO_BUFFER_SIZE                100
 #define PWL_MAX_MFR_SIZE                10 // min size for "Dell Inc."
