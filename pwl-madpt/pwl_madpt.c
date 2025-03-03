@@ -72,10 +72,11 @@ uint32_t mbim_err_cnt = 0;
 char g_response[PWL_MQ_MAX_RESP];
 int g_oem_pri_state = -1;
 
+static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
 static GMainLoop *gp_loop = NULL;
 static pwlCore *gp_proxy = NULL;
 static gulong g_ret_signal_handler[RET_SIGNAL_HANDLE_SIZE];
-//static signal_callback_t g_signal_callback;
+static signal_callback_t g_signal_callback;
 //static method_callback_t g_method_callback;
 
 static void mbim_device_ready_cb();
@@ -242,10 +243,29 @@ static void cb_owner_name_changed_notify(GObject *object, GParamSpec *pspec, gpo
         g_free(pname_owner);
     }
 }
+
+static gboolean signal_notice_module_recovery_finish_handler(pwlCore *object, int arg_type, gpointer userdata) {
+   if (NULL != g_signal_callback.callback_notice_module_recovery_finish) {
+       g_signal_callback.callback_notice_module_recovery_finish(arg_type);
+   }
+
+   return TRUE;
+}
+
 gboolean register_client_signal_handler(pwlCore *p_proxy) {
     PWL_LOG_DEBUG("register_client_signal_handler call.");
     g_ret_signal_handler[0] = g_signal_connect(p_proxy, "notify::g-name-owner", G_CALLBACK(cb_owner_name_changed_notify), NULL);
+    g_ret_signal_handler[1] = g_signal_connect(p_proxy, "notice-module-recovery-finish",
+                                               G_CALLBACK(signal_notice_module_recovery_finish_handler), NULL);
     return TRUE;
+}
+
+void registerSignalCallback(signal_callback_t *callback) {
+    if (NULL != callback) {
+        memcpy(&g_signal_callback, callback, sizeof(signal_callback_t));
+    } else {
+        PWL_LOG_DEBUG("registerSignalCallback: parameter point is NULL");
+    }
 }
 
 gboolean gdbus_init(void) {
@@ -568,6 +588,20 @@ static gpointer jp_fcc_thread_func(gpointer data) {
     return NULL;
 }
 
+static gpointer recovery_wait_thread_func(gpointer data) {
+    if (!cond_wait(&g_mutex, &g_cond, PWL_RECOVERY_CHECK_DELAY_SEC + 60)) {
+        PWL_LOG_ERR("timed out for wait of recovery finish done, continue");
+    } else {
+        PWL_LOG_DEBUG("Recovery finished, madpt ready to work");
+        sleep(1);
+    }
+    //Send signal to pwl_pref to get fw version
+    pwl_core_call_madpt_ready_method (gp_proxy, NULL, NULL, NULL);
+
+    send_message_reply(PWL_CID_MADPT_RESTART, PWL_MQ_ID_MADPT, PWL_MQ_ID_FWUPDATE, PWL_CID_STATUS_OK, "Madpt started");
+    return NULL;
+}
+
 void enable_jp_fcc_auto_reboot() {
     PWL_LOG_DEBUG("Enable JP FCC auto reboot");
     // enable this flag so modem will do switch when sim changed to corresponding carrier
@@ -742,16 +776,24 @@ void restart() {
     PWL_LOG_INFO("restarting...");
 }
 
+void signal_callback_notice_module_recovery_finish(int type) {
+    PWL_LOG_DEBUG("!!! signal_callback_notice_module_recovery_finish !!!");
+    if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        pthread_cond_signal(&g_cond);
+    }
+    return;
+}
+
 gint main() {
     PWL_LOG_INFO("start");
 
-    pwl_device_type_t type = pwl_get_device_type_await();
-    if (type == PWL_DEVICE_TYPE_UNKNOWN) {
+    g_device_type = pwl_get_device_type_await();
+    if (g_device_type == PWL_DEVICE_TYPE_UNKNOWN) {
         PWL_LOG_INFO("Unsupported device.");
         return EXIT_SUCCESS;
     }
 
-    if (type == PWL_DEVICE_TYPE_USB) {
+    if (g_device_type == PWL_DEVICE_TYPE_USB) {
         g_at_intf = PWL_AT_OVER_MBIM_API;
     } else {
         g_at_intf = PWL_AT_CHANNEL;
@@ -766,16 +808,17 @@ gint main() {
 
     GThread *msg_queue_thread = g_thread_new("msg_queue_thread", msg_queue_thread_func, NULL);
 
+    signal_callback_t signal_callback;
+    signal_callback.callback_notice_module_recovery_finish = signal_callback_notice_module_recovery_finish;
+    registerSignalCallback(&signal_callback);
+
     gdbus_init();
 
     while(!dbus_service_is_ready());
     PWL_LOG_DEBUG("DBus Service is ready");
 
     if (g_at_intf != PWL_AT_OVER_MBIM_API) { // mbim api case need to wait for device ready first
-        //Send signal to pwl_pref to get fw version
-        pwl_core_call_madpt_ready_method_sync (gp_proxy, NULL, NULL);
-
-        send_message_reply(PWL_CID_MADPT_RESTART, PWL_MQ_ID_MADPT, PWL_MQ_ID_FWUPDATE, PWL_CID_STATUS_OK, "Madpt started");
+        GThread *jp_fcc_thread = g_thread_new("recovery_wait_thread", recovery_wait_thread_func, NULL);
     } else {
         GThread *jp_fcc_thread = g_thread_new("jp_fcc_thread", jp_fcc_thread_func, NULL);
     }

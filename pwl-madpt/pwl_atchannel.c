@@ -109,6 +109,16 @@ gboolean send_at_cmd(const char *port, const char *command, gchar **response) {
             break;
         }
 
+        // remove any NULL in response
+        for (int i = 0; i < resp_len; i++) {
+            //if (DEBUG) PWL_LOG_DEBUG("response[%d]: %X", i, resp[i]);
+            if (resp[i] == 0) {
+                PWL_LOG_DEBUG("NULL detected in %s response[%d]: %X", command, i, resp[i]);
+                memcpy(resp + i, resp + (i + 1), (resp_len - 1 - i));
+                resp_len--;
+            }
+        }
+
         if (strstr(resp, "OK") || strstr(resp, "ERROR") || strstr(resp, "+CME ERROR")) {
              break;
         }

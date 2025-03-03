@@ -36,6 +36,12 @@
 #define OEM_PRI_RESET_UPDATE_FAILED     2  // error
 #define OEM_PRI_RESET_NO_NEED_UPDATE    9  // trigger modem reboot
 
+typedef void (*signal_notice_module_recovery_finish_callback)(int);
+
+typedef struct {
+    signal_notice_module_recovery_finish_callback callback_notice_module_recovery_finish;
+} signal_callback_t;
+
 gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size);
 void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem);
 void restart();
