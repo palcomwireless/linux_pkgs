@@ -3243,6 +3243,7 @@ void signal_callback_notice_module_recovery_finish(int type) {
             PWL_LOG_ERR("Check flash data error, abort.");
             return;
         }
+        PWL_LOG_DEBUG("any fw update ongoing? %s", (g_is_fw_update_processing) ? "Yes" : "No");
         if (g_is_fw_update_processing == NOT_IN_FW_UPDATE_PROCESSING) {
             if (start_update_process_pcie(TRUE, type) == RET_OK) {
                 // Download success, remove flash data folder
@@ -3251,6 +3252,7 @@ void signal_callback_notice_module_recovery_finish(int type) {
                 pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
                 return;
             } else {
+                PWL_LOG_DEBUG("Need update? %s", (g_need_update) ? "Yes" : "No");
                 if (g_need_update) {
                     close_progress_msg_box(CLOSE_TYPE_RETRY);
                     get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
@@ -4934,7 +4936,11 @@ gint main( int Argc, char **Argv )
     // wait for core & madpt ready before start checking for update
     int need_retry = 0;
     get_fw_update_status_value(NEED_RETRY_FW_UPDATE, &need_retry);
-    if (!cond_wait(&g_madpt_wait_mutex, &g_madpt_wait_cond, 60)) {
+    int delay_time = 60;
+    if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        delay_time = delay_time + PWL_RECOVERY_CHECK_DELAY_SEC;
+    }
+    if (!cond_wait(&g_madpt_wait_mutex, &g_madpt_wait_cond, delay_time)) {
         PWL_LOG_ERR("timed out or error for madpt start, continue...");
     }
     if (need_retry == 1) {
