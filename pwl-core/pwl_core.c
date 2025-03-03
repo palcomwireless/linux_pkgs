@@ -38,6 +38,8 @@ static GCancellable *g_cancellable;
 static MbimDevice *g_pci_device;
 static GCancellable *g_pci_cancellable;
 
+static gboolean gb_recoverying = FALSE;
+
 // For GPIO reset
 // int g_check_fastboot_retry_count;
 // int g_wait_modem_port_retry_count;
@@ -470,8 +472,12 @@ static gboolean request_fw_update_check(pwlCore     *object,
                            GDBusMethodInvocation *invocation) {
 
     PWL_LOG_DEBUG("Received request, send signal do fw update check");
-    pwl_core_emit_get_fw_version_signal(gp_skeleton);
-    pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLZ);
+    if (!gb_recoverying) {
+        pwl_core_emit_get_fw_version_signal(gp_skeleton);
+        pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLZ);
+    } else {
+        PWL_LOG_DEBUG("Recovery under going, skip fw update check request");
+    }
     return TRUE;
 }
 
@@ -989,8 +995,10 @@ static gpointer mbim_device_thread(gpointer data) {
 
 static gpointer mbim_monitor_thread_func(gpointer data) {
     //TODO: Check better way to check device ready
-    PWL_LOG_DEBUG("Sleep 60s wait to device ");
-    sleep(60);
+    PWL_LOG_DEBUG("Sleep %ds wait to device", PWL_RECOVERY_CHECK_DELAY_SEC);
+    sleep(PWL_RECOVERY_CHECK_DELAY_SEC);
+
+    gb_recoverying = TRUE;
 
     gchar port [20];
     memset(port, 0, sizeof(port));
@@ -1062,6 +1070,7 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
             }
         }
     }
+    gb_recoverying = FALSE;
 
     return ((void*)0);
 }
