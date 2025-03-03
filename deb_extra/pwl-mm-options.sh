@@ -1,6 +1,6 @@
 #!/bin/bash
 
-mm_options=('--test-low-power-suspend-resume' '--test-quick-suspend-resume')
+mm_options=('--test-quick-suspend-resume')
 device=`lspci -D -nn | grep 14c0:4d75`
 
 service_file=$(systemctl show ModemManager -p FragmentPath --value)
