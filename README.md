@@ -136,3 +136,6 @@ To install services
 
 - version: 4.3.5
     - Delay PWL Madpt service start till recovery check completed
+
+- version: 4.4.0
+    - Update preferred carrier list
