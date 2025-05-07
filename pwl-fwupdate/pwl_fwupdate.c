@@ -98,7 +98,7 @@ gboolean g_has_update_include_oem_img = FALSE;
 gboolean g_only_flash_oem_image = FALSE;
 
 int g_pref_carrier_id = 0;
-int MAX_PREFERRED_CARRIER_NUMBER = 14;
+int MAX_PREFERRED_CARRIER_NUMBER = 15;
 // char *g_pref_carrier;
 
 char g_set_pref_version = 0;
@@ -129,7 +129,7 @@ static bool register_client_signal_handler(pwlCore *p_proxy);
 char g_test_sku_id[16];
 
 const char g_support_option[][8] = { "-f", "-d", "-impref", "-key", "-h", "-ifb", "-dfb", "-time", "-debug" };
-const char g_preferred_carriers[14][MAX_PATH] = {
+const char g_preferred_carriers[15][MAX_PATH] = {
     "ATT",
     "DOCOMO",
     "DT",
@@ -143,7 +143,8 @@ const char g_preferred_carriers[14][MAX_PATH] = {
     "TELSTRA",
     "TMO",
     "VERIZON",
-    "VODAFONE"
+    "VODAFONE",
+    "Rakuten"
 };
 //////
 const char *gp_first_temp_file_name = "FirstTemp";
