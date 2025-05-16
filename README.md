@@ -139,3 +139,6 @@ To install services
 
 - version: 4.4.0
     - Update preferred carrier list
+
+- version: 4.4.1
+    - config of power/control to 'auto' for usb device
