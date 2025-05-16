@@ -10,6 +10,8 @@ ATTRS{idVendor}=="413c", ATTRS{idProduct}=="8217", SUBSYSTEM=="tty", ENV{.MM_USB
 ATTRS{idVendor}=="413c", ATTRS{idProduct}=="8218", SUBSYSTEM=="tty", ENV{.MM_USBIFNUM}=="02", ENV{ID_MM_PORT_IGNORE}="1"
 ATTRS{idVendor}=="413c", ATTRS{idProduct}=="8219", SUBSYSTEM=="tty", ENV{.MM_USBIFNUM}=="02", ENV{ID_MM_PORT_IGNORE}="1"
 
+ATTRS{idVendor}=="413c", ATTRS{idProduct}=="8217", TEST=="power/control", ATTR{power/control}="auto"
+
 LABEL="mm_pwl_port_types_end"
 
 
