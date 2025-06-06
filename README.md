@@ -63,13 +63,13 @@ To install services
     sudo systemctl enable pwl-xxx.service
 - start system service
 
-	sudo systemctl start pwl-xxx.service
+    sudo systemctl start pwl-xxx.service
 - stop system service
 
-	sudo systemctl stop pwl-xxx.service
+    sudo systemctl stop pwl-xxx.service
 - check the system service status
 
-	sudo systemctl status pwl-xxx.service
+    sudo systemctl status pwl-xxx.service
 
 # Release History
 - version: 1.0.0
@@ -142,3 +142,6 @@ To install services
 
 - version: 4.4.1
     - config of power/control to 'auto' for usb device
+
+- version: 4.4.2
+    - Update SELinux policy definitions
