@@ -145,3 +145,6 @@ To install services
 
 - version: 4.4.2
     - Update SELinux policy definitions
+
+- version: 4.4.3
+    - Override Test options in ModemManager for usb device
