@@ -21,6 +21,7 @@
 #include <sys/msg.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <dlfcn.h>
 
 #include "common.h"
 #include "dbus_common.h"
@@ -66,7 +67,7 @@ pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_cond = PTHREAD_COND_INITIALIZER;
 
 gint g_exit_code = EXIT_SUCCESS;
-pwl_at_intf_t g_at_intf = PWL_AT_INTF_NONE;
+pwl_at_intf_t g_at_intf = PWL_AT_OVER_MBIM_API;
 GThread *g_mbim_recv_thread = NULL;
 uint32_t mbim_err_cnt = 0;
 char g_response[PWL_MQ_MAX_RESP];
@@ -89,12 +90,15 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
         return FALSE;
     }
 
-    gchar* head = strstr(rsp, "\n");
-    gchar* start = NULL;
+    gchar* start = (gchar*) rsp;
+    if (strncmp(start, "at+", strlen("at+")) == 0 || strncmp(start, "at*", strlen("at*")) == 0) {
+        PWL_LOG_DEBUG("Ignore the AT command at the beginning of the response.");
+        start = strstr(start, "\n");
+    }
+
     gchar pcie_buffer[PWL_MQ_MAX_RESP] = {0};
-    if (head != NULL) {
-        start = head + 1;
-        // check if start with more '\n'
+    if (start != NULL) {
+        // check if start with '\n'
         while (strncmp(start, "\n", strlen("\n")) == 0) {
             start = start + 1;
         }
@@ -113,10 +117,8 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
         }
     }
 
-    if (head == NULL || start == NULL || end == NULL) {
-        if (head == NULL)
-            PWL_LOG_ERR("[Notice] head == NULL");
-        else if (start == NULL)
+    if (start == NULL || end == NULL) {
+        if (start == NULL)
             PWL_LOG_ERR("[Notice] start == NULL");
         else if (end == NULL) {
             PWL_LOG_ERR("[Notice] end == NULL");
@@ -165,7 +167,11 @@ gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
 
 pwl_cid_status_t at_cmd_request(gchar *command) {
     if (g_at_intf == PWL_AT_OVER_MBIM_API) {
-        pwl_mbimdeviceadpt_at_req(command, mbim_at_resp_cb);
+        if (g_device_type == PWL_DEVICE_TYPE_USB) {
+            pwl_mbimdeviceadpt_at_req(PWL_MBIM_AT_COMMAND, command, mbim_at_resp_cb);
+        } else {
+            pwl_mbimdeviceadpt_at_req(PWL_MBIM_AT_TUNNEL, command, mbim_at_resp_cb);
+        }
         return PWL_CID_STATUS_OK;
     } else if (g_at_intf == PWL_AT_CHANNEL || g_at_intf == PWL_AT_OVER_MBIM_CLI) {
         gchar *response = NULL;
@@ -784,6 +790,43 @@ void signal_callback_notice_module_recovery_finish(int type) {
     return;
 }
 
+int check_if_mbim_api_exist() {
+    void *handle;
+    void *set_new_func = NULL;
+    void *parse_func = NULL;
+
+    handle = dlopen("libmbim-glib.so", RTLD_LAZY);
+    if (!handle) {
+        PWL_LOG_DEBUG("Can not open libmbim: %s", dlerror());
+        PWL_LOG_DEBUG("Try to open libmbim-glib.so.4");
+        handle = dlopen("libmbim-glib.so.4", RTLD_LAZY);
+        if (!handle) {
+            PWL_LOG_DEBUG("Can not open libmbim-glib.so.4: %s", dlerror());
+            g_at_intf = PWL_AT_CHANNEL;
+            return -1;
+        }
+    }
+
+    dlerror();
+
+    set_new_func = dlsym(handle, "mbim_message_intel_attunnel_at_command_set_new");
+    parse_func = dlsym(handle, "mbim_message_intel_attunnel_at_command_response_parse");
+
+    if (set_new_func && parse_func) {
+        if (DEBUG) PWL_LOG_DEBUG("MBIM api check pass, set PWL_AT_OVER_MBIM_API");
+        g_at_intf = PWL_AT_OVER_MBIM_API;
+    } else {
+        if (!set_new_func)
+            if (DEBUG) PWL_LOG_DEBUG("No mbim_message_intel_attunnel_at_command_set_new API");
+        if (!parse_func)
+            if (DEBUG) PWL_LOG_DEBUG("No mbim_message_intel_attunnel_at_command_response_parse API");
+        if (DEBUG) PWL_LOG_DEBUG("MBIM api check failed, set PWL_AT_CHANNEL");
+        g_at_intf = PWL_AT_CHANNEL;
+    }
+    dlclose(handle);
+    return 0;
+}
+
 gint main() {
     PWL_LOG_INFO("start");
 
@@ -793,16 +836,21 @@ gint main() {
         return EXIT_SUCCESS;
     }
 
-    if (g_device_type == PWL_DEVICE_TYPE_USB) {
-        g_at_intf = PWL_AT_OVER_MBIM_API;
-    } else {
-        g_at_intf = PWL_AT_CHANNEL;
-    }
-
     pwl_discard_old_messages(PWL_MQ_PATH_MADPT);
 
+    // dynamic check if libmbim AT Tunnel API exist
+    if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        check_if_mbim_api_exist();
+    }
+
     if (g_at_intf == PWL_AT_OVER_MBIM_API) {
-        mbim_init(TRUE);
+        if (g_device_type == PWL_DEVICE_TYPE_USB) {
+            mbim_init(TRUE);
+        } else {
+            // need to wait for recovery check to complete first, so no need
+            // to register cb for signaling madpt_ready at this point
+            mbim_init(FALSE);
+        }
         sleep(5);
     }
 
@@ -817,9 +865,9 @@ gint main() {
     while(!dbus_service_is_ready());
     PWL_LOG_DEBUG("DBus Service is ready");
 
-    if (g_at_intf != PWL_AT_OVER_MBIM_API) { // mbim api case need to wait for device ready first
-        GThread *jp_fcc_thread = g_thread_new("recovery_wait_thread", recovery_wait_thread_func, NULL);
-    } else {
+    if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
+        GThread *recovery_wait_thread = g_thread_new("recovery_wait_thread", recovery_wait_thread_func, NULL);
+    } else if (g_device_type == PWL_DEVICE_TYPE_USB) {
         GThread *jp_fcc_thread = g_thread_new("jp_fcc_thread", jp_fcc_thread_func, NULL);
     }
 

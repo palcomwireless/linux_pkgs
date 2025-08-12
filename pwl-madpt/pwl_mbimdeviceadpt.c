@@ -55,7 +55,33 @@ static void at_command_query_cb(MbimDevice *dev, GAsyncResult *res, gpointer use
     }
 }
 
-void pwl_mbimdeviceadpt_at_req(char *command, mbim_at_resp_callback cb) {
+static void at_tunnel_query_cb(MbimDevice *dev, GAsyncResult *res, gpointer user_data) {
+    g_autoptr(MbimMessage) response = NULL;
+    g_autoptr(GError) error = NULL;
+    guint32 command_resp_size;
+    const guint8 *command_resp;
+    mbim_at_resp_callback cb;
+
+    cb = user_data;
+
+    response = mbim_device_command_finish(dev, res, &error);
+    if (response &&
+        mbim_message_response_get_result(response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_intel_attunnel_at_command_response_parse(response,
+                                                              &command_resp_size,
+                                                              &command_resp, &error)) {
+
+        if (DEBUG) PWL_LOG_DEBUG("MBIM Response: %s\n", command_resp);
+        if (cb) cb((unsigned char *)command_resp);
+
+    } else {
+        PWL_LOG_ERR("Couldn't set at tunnel services, error: %s", error->message);
+        guint8 *error_resp = "QUERY ERROR";
+        if (cb) cb(error_resp);
+    }
+}
+
+void pwl_mbimdeviceadpt_at_req(madpt_mbim_intf_t intf, char *command, mbim_at_resp_callback cb) {
 
     if (DEBUG) PWL_LOG_DEBUG("cmd: %s", command);
 
@@ -66,10 +92,17 @@ void pwl_mbimdeviceadpt_at_req(char *command, mbim_at_resp_callback cb) {
     memset(command_req, 0, command_req_size);
     sprintf(command_req, "%s%s", command, "\r\n");
 
-    message = mbim_message_compal_at_command_query_new(command_req_size,
-              (const guint8 *)command_req, NULL);
-    mbim_device_command(g_device, message, (PWL_CMD_TIMEOUT_SEC - 1), NULL,
-                        (GAsyncReadyCallback)at_command_query_cb, (gpointer)cb);
+    if (intf == PWL_MBIM_AT_COMMAND) {
+        message = mbim_message_compal_at_command_query_new(command_req_size,
+                  (const guint8 *)command_req, NULL);
+        mbim_device_command(g_device, message, (PWL_CMD_TIMEOUT_SEC - 1), NULL,
+                            (GAsyncReadyCallback)at_command_query_cb, (gpointer)cb);
+    } else if (intf == PWL_MBIM_AT_TUNNEL) {
+        message = mbim_message_intel_attunnel_at_command_set_new(command_req_size,
+                  (const guint8 *)command_req, NULL);
+        mbim_device_command(g_device, message, (PWL_CMD_TIMEOUT_SEC - 1), NULL,
+                            (GAsyncReadyCallback)at_tunnel_query_cb, (gpointer)cb);
+    }
 
     if (command_req) {
         free(command_req);
