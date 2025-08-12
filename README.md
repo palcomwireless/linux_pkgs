@@ -144,7 +144,10 @@ To install services
     - config of power/control to 'auto' for usb device
 
 - version: 4.4.2
-    - Update SELinux policy definitions
+    - Update SELinux policy definitions for pcie device
 
 - version: 4.4.3
     - Override Test options in ModemManager for usb device
+
+- version: 4.5.0
+    - pcie device Modem AT control over MBIM
