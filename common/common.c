@@ -32,7 +32,8 @@ char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
                         "0D49", "0D61", "0D4D", "0D4E", "0D4F",
                         "0D65" };
 
-char *pcie_devices[] = { "0CF4", "0CF5", "0CDD", "0CF1", "0CDB" };
+char *pcie_devices[] = { "0CF4", "0CF5", "0CDD", "0CF1", "0CDB",
+                         "0D4D", "0D4E", "0D4F", "0D65" };
 
 gchar* usbid_info[] = {
     "413c:8217",
