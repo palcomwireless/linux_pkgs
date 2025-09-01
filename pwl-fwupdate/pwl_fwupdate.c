@@ -523,7 +523,7 @@ void send_message_queue_with_content(uint32_t cid, char *content) {
     mq_send(mq, (gchar *)&message, sizeof(message), 0);
 }
 
-void* msg_queue_thread_func() {
+void* msg_queue_thread_func(void *args) {
     mqd_t mq;
     struct mq_attr attr;
     msg_buffer_t message;
@@ -781,7 +781,7 @@ void* msg_queue_thread_func() {
     return NULL;
 }
 
-void* monitor_retry_func() {
+void* monitor_retry_func(void *args) {
     while (TRUE) {
         sleep(5);
         if (g_retry_fw_update) {
@@ -1725,7 +1725,7 @@ int extract_update_files()
 }
 
 #define EVENT_NUM  12
-void *monitor_package_func2()
+void *monitor_package_func2(void *args)
 {
     char *event_str[EVENT_NUM] =
     {
@@ -4212,7 +4212,7 @@ int get_fastboot_resp(char *response) {
     return close_ret;
 }
 
-void *get_send_image_resp_thread_func() {
+void *get_send_image_resp_thread_func(void *args) {
     char fb_resp[MAX_COMMAND_LEN] = {0};
     while (1) {
         get_fastboot_resp(fb_resp);
