@@ -80,7 +80,7 @@ static gulong g_ret_signal_handler[RET_SIGNAL_HANDLE_SIZE];
 static signal_callback_t g_signal_callback;
 //static method_callback_t g_method_callback;
 
-static void mbim_device_ready_cb();
+static void mbim_device_ready_cb(gboolean opened);
 static void mbim_at_resp_cb(const gchar* response);
 
 gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size) {
