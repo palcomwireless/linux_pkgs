@@ -809,17 +809,17 @@ int check_if_mbim_api_exist() {
 
     dlerror();
 
-    set_new_func = dlsym(handle, "mbim_message_intel_attunnel_at_command_set_new");
-    parse_func = dlsym(handle, "mbim_message_intel_attunnel_at_command_response_parse");
+    set_new_func = dlsym(handle, "mbim_message_intel_at_tunnel_at_command_set_new");
+    parse_func = dlsym(handle, "mbim_message_intel_at_tunnel_at_command_response_parse");
 
     if (set_new_func && parse_func) {
         if (DEBUG) PWL_LOG_DEBUG("MBIM api check pass, set PWL_AT_OVER_MBIM_API");
         g_at_intf = PWL_AT_OVER_MBIM_API;
     } else {
         if (!set_new_func)
-            if (DEBUG) PWL_LOG_DEBUG("No mbim_message_intel_attunnel_at_command_set_new API");
+            if (DEBUG) PWL_LOG_DEBUG("No mbim_message_intel_at_tunnel_at_command_set_new API");
         if (!parse_func)
-            if (DEBUG) PWL_LOG_DEBUG("No mbim_message_intel_attunnel_at_command_response_parse API");
+            if (DEBUG) PWL_LOG_DEBUG("No mbim_message_intel_at_tunnel_at_command_response_parse API");
         if (DEBUG) PWL_LOG_DEBUG("MBIM api check failed, set PWL_AT_CHANNEL");
         g_at_intf = PWL_AT_CHANNEL;
     }

@@ -67,7 +67,7 @@ static void at_tunnel_query_cb(MbimDevice *dev, GAsyncResult *res, gpointer user
     response = mbim_device_command_finish(dev, res, &error);
     if (response &&
         mbim_message_response_get_result(response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_intel_attunnel_at_command_response_parse(response,
+        mbim_message_intel_at_tunnel_at_command_response_parse(response,
                                                               &command_resp_size,
                                                               &command_resp, &error)) {
 
@@ -98,7 +98,7 @@ void pwl_mbimdeviceadpt_at_req(madpt_mbim_intf_t intf, char *command, mbim_at_re
         mbim_device_command(g_device, message, (PWL_CMD_TIMEOUT_SEC - 1), NULL,
                             (GAsyncReadyCallback)at_command_query_cb, (gpointer)cb);
     } else if (intf == PWL_MBIM_AT_TUNNEL) {
-        message = mbim_message_intel_attunnel_at_command_set_new(command_req_size,
+        message = mbim_message_intel_at_tunnel_at_command_set_new(command_req_size,
                   (const guint8 *)command_req, NULL);
         mbim_device_command(g_device, message, (PWL_CMD_TIMEOUT_SEC - 1), NULL,
                             (GAsyncReadyCallback)at_tunnel_query_cb, (gpointer)cb);
