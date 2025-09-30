@@ -35,6 +35,8 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <sys/inotify.h>
+#include <ctype.h>
+#include <dirent.h>
 #include <time.h>
 
 #include "pwl_fwupdate.h"
@@ -369,13 +371,56 @@ int get_env_variable(char env_variable[],int length)
     return 0;
 }
 
+int detect_gpu_status() {
+    DIR *dir;
+    struct dirent *entry;
+    char path[512] = {0};
+    char device_id[64] = {0};
+    FILE *fp;
+
+    dir = opendir("/sys/class/drm");
+    if (!dir) {
+        PWL_LOG_ERR("Filed to open /sys/class/drm");
+        perror("Filed to open /sys/class/drm");
+        return -1; //Can not detect
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "card", 4) == 0) {
+            snprintf(path, sizeof(path), "/sys/class/drm/%s/device/device", entry->d_name);
+            fp = fopen(path, "r");
+            if (!fp) continue;
+
+            if (fgets(device_id, sizeof(device_id), fp)) {
+                fclose(fp);
+                device_id[strcspn(device_id, "\n")] = 0;
+
+                if (device_id[0] != '\0') {
+                    if (DEBUG) PWL_LOG_DEBUG("Find GPU device info.");
+                    closedir(dir);
+                    return 0;
+                }
+            }
+            fclose(fp);
+        }
+    }
+    closedir(dir);
+    return -1; // Not detect GPU
+}
+
 void update_progress_dialog(int percent_add, char *message, char *additional_message)
 {
+    if (detect_gpu_status() == -1) {
+        PWL_LOG_DEBUG("Can't detect GPU, update dialog abort!");
+        return;
+    }
+
     if (percent_add >= 100)
         g_progress_percent = 100;
     else
         g_progress_percent += percent_add;
     sprintf(g_progress_percent_text, "%d\n", g_progress_percent);
+
 #if (0) // remove text status update on popup message box
     if (additional_message == NULL)
         sprintf(g_progress_status, "# %s\n", message);
@@ -2957,7 +3002,7 @@ int start_update_process(gboolean is_startup)
         pclose(g_progress_fp);
         g_progress_fp = NULL;
     }
-    if (!is_startup) g_progress_fp = popen(g_progress_command,"w");
+    if ((detect_gpu_status() != -1) && !is_startup) g_progress_fp = popen(g_progress_command,"w");
 
     if (!is_startup) update_progress_dialog(2, "Start update process...", NULL);
     PWL_LOG_INFO("Start update Process...");
@@ -3036,7 +3081,7 @@ int start_update_process(gboolean is_startup)
 
     // === Compare main fw version ===
     if (!is_startup) update_progress_dialog(2, "Compare fw image version", NULL);
-    if (is_startup) g_progress_fp = popen(g_progress_command,"w");
+    if ((detect_gpu_status() != -1) && is_startup) g_progress_fp = popen(g_progress_command,"w");
 
     gboolean up_to_date = FALSE;
     if (g_has_update_include_fw_img) {
@@ -4182,40 +4227,41 @@ int send_fastboot_command(char *command, char *response) {
     return close_ret;
 }
 
-int get_fastboot_resp(char *response) {
-    int retry = 0;
+int get_fastboot_resp(int fd, char *response) {
     char resp[MAX_COMMAND_LEN] = {0};
 
     if (strlen(g_pcie_fastboot_port) <= 0)
         find_fastboot_port(g_pcie_fastboot_port);
 
-    int fd = open(g_pcie_fastboot_port, O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (fd < 0) {
-        PWL_LOG_ERR("Error opening serial port");
-        return RET_FAILED;
-    }
     fd_set rset;
-    struct timeval time = {FASTBOOT_CMD_TIMEOUT_SEC, 0};
-    FD_ZERO(&rset);
-    FD_SET(fd, &rset);
+    while (1) {
+        struct timeval time = {FASTBOOT_CMD_TIMEOUT_SEC, 0};
+        FD_ZERO(&rset);
+        FD_SET(fd, &rset);
+        int sel = select(fd + 1, &rset, NULL, NULL, &time);
+        if (sel <= 0) {
+            PWL_LOG_ERR("select timeout or error: %s", strerror(errno));
+            break;
+        }
 
-    while (select(fd + 1, &rset, NULL, NULL, &time) > 0) {
         memset(resp, 0, sizeof(resp));
         ssize_t len = read(fd, resp, sizeof(resp));
         // PWL_LOG_DEBUG("[read] len: %ld", len);
         if (len > 0) {
             strcpy(response, resp);
-            break;
-        } 
+            return RET_OK;
+        } else {
+            PWL_LOG_ERR("Read failed: %s", strerror(errno));
+        }
     }
-    int close_ret = close(fd);
-    return close_ret;
+    return RET_FAILED;
 }
 
 void *get_send_image_resp_thread_func(void *args) {
+    int fd = (int)(intptr_t)args;
     char fb_resp[MAX_COMMAND_LEN] = {0};
     while (1) {
-        get_fastboot_resp(fb_resp);
+        get_fastboot_resp(fd, fb_resp);
         if (strlen(fb_resp) > 0) {
             PWL_LOG_DEBUG("Send image to fastboot result: %s", fb_resp);
             if (strstr(fb_resp, "OKAY")) {
@@ -4279,24 +4325,63 @@ int flash_image(char *partition, char *image_file, char *checksum) {
     }
 
     // Send image file to fastboot port
-    PWL_LOG_DEBUG("\n[Send image file to fastboot]");
     memset(fb_resp, 0, sizeof(fb_resp));
     memset(fb_command, 0, sizeof(fb_command));
     sprintf(fb_command, "cat %s > %s", image_file, g_pcie_fastboot_port);
 
     void *send_result = NULL;
-    pthread_t get_resp_thread;
-    pthread_create(&get_resp_thread, NULL, get_send_image_resp_thread_func, NULL);
-
-    sleep(1);
-    FILE *fp2;
-    fp2 = popen(fb_command, "w");
-    if (fp2 == NULL) {
-        PWL_LOG_ERR("Send image to fastboot error!");
+    int fd = open(g_pcie_fastboot_port, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) {
+        PWL_LOG_ERR("Error opening serial port");
         return RET_FAILED;
     }
-    pclose(fp2);
+
+    sleep(1);
+    if (SPLIT_IMAGE) {
+        PWL_LOG_DEBUG("[Sending image file to fastboot using split chunk]");
+        char buf[SPLIT_IMAGE_BUFFER];
+        size_t bytes_read;
+        fp = fopen(image_file, "rb");
+        if (!fp) {
+            PWL_LOG_ERR("Open image file error!");
+            if (fd >= 0) {
+                close(fd);
+                fd = -1;
+            }
+            return RET_FAILED;
+        }
+
+        PWL_LOG_DEBUG("Send image to fastboot");
+        while ((bytes_read = fread(buf, 1, SPLIT_IMAGE_BUFFER, fp)) > 0) {
+            ssize_t bytes_written = write(fd, buf, bytes_read);
+            if (bytes_written < 0) {
+                PWL_LOG_ERR("Failed to write to fastboot port");
+                break;
+            }
+        }
+        fclose(fp);
+    } else {
+        PWL_LOG_DEBUG("[Sending image file to fastboot as a single chunk]");
+        FILE *fp2;
+        fp2 = popen(fb_command, "w");
+        if (fp2 == NULL) {
+            PWL_LOG_ERR("Send image to fastboot error!");
+            if (fd >= 0) {
+                close(fd);
+                fd = -1;
+            }
+            return RET_FAILED;
+        }
+        pclose(fp2);
+    }
+
+    pthread_t get_resp_thread;
+    pthread_create(&get_resp_thread, NULL, get_send_image_resp_thread_func, (void *)(intptr_t)fd);
     pthread_join(get_resp_thread, &send_result);
+    if (fd >= 0) {
+        close(fd);
+        fd = -1;
+    }
 
     if (send_result != (void *) RET_OK) {
         PWL_LOG_ERR("Send image failed, abort!");
@@ -4366,6 +4451,40 @@ int flash_image(char *partition, char *image_file, char *checksum) {
         }
     }
 
+    return RET_OK;
+}
+
+int do_remove_rescan() {
+    FILE *fp;
+    char command[MAX_COMMAND_LEN] = {0};
+    // Remove device from pcie
+    PWL_LOG_DEBUG("\nRemove");
+    memset(command, 0, sizeof(command));
+    sprintf(command, "echo 1 > %s", g_t7xx_mode_remove_node);
+    PWL_LOG_DEBUG("%s", command);
+    fp = popen(command, "w");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Remove device failed");
+        return RET_FAILED;
+    }
+    pclose(fp);
+
+    for (int i = 1; i <= 5; i++) {
+        if (DEBUG) PWL_LOG_DEBUG("Sleep %d", i);
+        sleep(1);
+    }
+
+    // Rescan
+    PWL_LOG_DEBUG("\nRescan");
+    memset(command, 0, sizeof(command));
+    sprintf(command, "echo 1 > /sys/bus/pci/rescan");
+    fp = popen(command, "w");
+
+    if (fp == NULL) {
+        PWL_LOG_ERR("Rescan failed\n");
+        return RET_FAILED;
+    }
+    pclose(fp);
     return RET_OK;
 }
 
@@ -4446,45 +4565,32 @@ int switch_t7xx_mode(char *mode) {
     }
     pclose(fp);
 
+    // Sleep 5 secs
     for (int i = 1; i <= 5; i++) {
         if (DEBUG) PWL_LOG_DEBUG("Sleep %d", i);
         sleep(1);
     }
-
-    memset(t7xx_mode, 0, sizeof(t7xx_mode));
-    query_t7xx_mode(t7xx_mode);
-    PWL_LOG_DEBUG("t7xx_mode state: %s", t7xx_mode);
-
-    // Remove device from pcie
-    PWL_LOG_DEBUG("\nRemove");
-    memset(command, 0, sizeof(command));
-    sprintf(command, "echo 1 > %s", g_t7xx_mode_remove_node);
-    PWL_LOG_DEBUG("%s", command);
-    fp = popen(command, "w");
-    if (fp == NULL) {
-        PWL_LOG_ERR("Remove device failed");
-        return RET_FAILED;
-    }
-    pclose(fp);
-
-    for (int i = 1; i <= 5; i++) {
-        if (DEBUG) PWL_LOG_DEBUG("Sleep %d", i);
-        sleep(1);
-    }
-
-    // Rescan
-    PWL_LOG_DEBUG("\nRescan");
-    memset(command, 0, sizeof(command));
-    sprintf(command, "echo 1 > /sys/bus/pci/rescan");
-    fp = popen(command, "w");
-
-    if (fp == NULL) {
-        PWL_LOG_ERR("Rescan failed\n");
-        return RET_FAILED;
-    }
-    pclose(fp);
 
     if (strcmp(mode, MODE_FASTBOOT_SWITCHING) == 0) {
+        // Check t7xx_mode (max 10 secs)
+        for (int i = 1; i <= 10; i++) {
+            memset(t7xx_mode, 0, sizeof(t7xx_mode));
+            query_t7xx_mode(t7xx_mode);
+            PWL_LOG_DEBUG("t7xx_mode state: %s", t7xx_mode);
+            if (strcmp(t7xx_mode, "fastboot_download") == 0) {
+                break;
+            } else {
+                sleep(1);
+            }
+        }
+
+        if (strcmp(t7xx_mode, "fastboot_download") != 0) {
+            // Do remove and rescan
+            if (do_remove_rescan() != RET_OK) {
+                return RET_FAILED;
+            }
+        }
+
         for (int i = 1; i <= 20; i++) {
             memset(t7xx_mode, 0, sizeof(t7xx_mode));
             query_t7xx_mode(t7xx_mode);
@@ -4521,6 +4627,10 @@ int switch_t7xx_mode(char *mode) {
         }
         return RET_FAILED;
     } else {
+        // Do remove and rescan
+        if (do_remove_rescan() != RET_OK) {
+            return RET_FAILED;
+        }
         for (int i = 1; i <= 60; i++) {
             memset(t7xx_mode, 0, sizeof(t7xx_mode));
             query_t7xx_mode(t7xx_mode);
@@ -4604,7 +4714,8 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
         pclose(g_progress_fp);
         g_progress_fp = NULL;
     }
-    if (!is_startup) g_progress_fp = popen(g_progress_command,"w");
+
+    if ((detect_gpu_status() != -1) && !is_startup) g_progress_fp = popen(g_progress_command,"w");
 
     // if (!is_startup) update_progress_dialog(2, "Start update process...", NULL);
     PWL_LOG_INFO("Start update Process...");
@@ -4658,7 +4769,7 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
         return update_result;
     }
 
-    if (is_startup) g_progress_fp = popen(g_progress_command, "w");
+    if ((detect_gpu_status() != -1) && is_startup) g_progress_fp = popen(g_progress_command, "w");
 
     // Switch to download mode
     update_progress_dialog(3, "Switch to download mode...", NULL);

@@ -83,6 +83,8 @@
 #define UPDATE_TYPE_ONLY_DEV        3
 #define GETVER_RETRY_LIMIT          50
 #define FB_CMD_CONTINUE_SUCCESS_TH  10
+#define SPLIT_IMAGE                 1
+#define SPLIT_IMAGE_BUFFER          2048
 
 #define UNZIP_FOLDER_FW             "/opt/pwl/firmware/FwPackage"
 #define UNZIP_FOLDER_DVP            "/opt/pwl/firmware/DevPackage"
@@ -164,7 +166,7 @@ int query_t7xx_mode(char *mode);
 int find_fastboot_port(char *fastboot_port);
 int switch_t7xx_mode(char *mode);
 int send_fastboot_command(char *command, char *response);
-int get_fastboot_resp(char *response);
+int get_fastboot_resp(int fd, char *response);
 int flash_image(char *partition, char *image_name, char *checksum);
 int check_update_data(int check_type);
 int parse_checksum(char *checksum_file, char *key_image, char *checksum_value);
