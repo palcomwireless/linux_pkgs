@@ -33,7 +33,7 @@ char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
                         "0D65" };
 
 char *pcie_devices[] = { "0CF4", "0CF5", "0CDD", "0CF1", "0CDB",
-                         "0D4D", "0D4E", "0D4F", "0D65" };
+                         "0D4D", "0D4E", "0D4F", "0D65", "0DBD" };
 
 gchar* usbid_info[] = {
     "413c:8217",
@@ -572,6 +572,125 @@ int get_fw_update_status_value(char *key, int *result) {
     fp = fopen(FW_UPDATE_STATUS_RECORD, "r");
     if (fp == NULL) {
         PWL_LOG_ERR("Open fw_status file error!");
+        return -1;
+    }
+
+    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
+        if (strstr(line, key)) {
+            temp_pos = strchr(line, '=');
+            ++temp_pos;
+            strncpy(value, temp_pos, strlen(temp_pos));
+            if (NULL != strstr(value, "\r\n"))
+            {
+                PWL_LOG_DEBUG("get result string has carriage return\n");
+                value[strlen(temp_pos)-2] = '\0';
+            } else {
+                value[strlen(temp_pos)-1] = '\0';
+            }
+        }
+    }
+    // PWL_LOG_DEBUG("value: %s\n", value);
+    *result = atoi(value);
+    fclose(fp);
+    return 0;
+}
+
+int esim_profile_remove_status_init() {
+    FILE *fp = NULL;
+    if (0 == access(ESIM_PROFILE_REMOVE_RECORD, F_OK)) {
+        PWL_LOG_DEBUG("eSim profile remove record file exist");
+        fp = fopen(ESIM_PROFILE_REMOVE_RECORD, "r");
+
+        if (fp == NULL) {
+            PWL_LOG_ERR("Open eSim profile remove record file error!");
+            return -1;
+        }
+        fclose(fp);
+    } else {
+        PWL_LOG_DEBUG("File not exist");
+        fp = fopen(ESIM_PROFILE_REMOVE_RECORD, "w");
+
+        if (fp == NULL) {
+            PWL_LOG_ERR("Create eSim profile remove record file error!");
+            return -1;
+        }
+        fprintf(fp, "Testprofile_Delete_Counter=0\n");
+        fprintf(fp, "Testprofile_Delete_Done=0\n");
+        fclose(fp);
+    }
+    return 0;
+}
+
+int set_esim_profile_remove_status_value(char *key, int value) {
+    FILE *fp = NULL;
+    char line[STATUS_LINE_LENGTH];
+    char new_value_line[STATUS_LINE_LENGTH];
+    char *new_content = NULL;
+
+    fp = fopen(ESIM_PROFILE_REMOVE_RECORD, "r+");
+    int value_len, file_size, new_file_size;
+    value_len = count_int_length(value);
+    if (fp == NULL) {
+        PWL_LOG_ERR("Open esim profile remove status file error!");
+        return -1;
+    }
+
+    // Check size
+    fseek(fp, 0, SEEK_END);
+    file_size = ftell(fp);
+
+    new_file_size = file_size + value_len + 1;
+    new_content = (char *) malloc(new_file_size);
+    if (new_content == NULL) {
+        PWL_LOG_ERR("malloc new_content failed");
+        fclose(fp);
+        return -1;
+    }
+    memset(new_content, 0, new_file_size);
+
+    fseek(fp, 0, SEEK_SET);
+    while (fgets(line, STATUS_LINE_LENGTH, fp) != NULL) {
+        if (strstr(line, key)) {
+            sprintf(new_value_line, "%s=%d\n", key, value);
+            strcat(new_content, new_value_line);
+        } else {
+            strcat(new_content, line);
+        }
+    }
+    fclose(fp);
+    fp = fopen(ESIM_PROFILE_REMOVE_RECORD, "w");
+
+    if (fp == NULL) {
+        PWL_LOG_ERR("Create esim profile remove status file error!");
+        free(new_content);
+        new_content = NULL;
+        return -1;
+    }
+    size_t written = fwrite(new_content, sizeof(char), strlen(new_content), fp);
+    if (written != strlen(new_content)) {
+        PWL_LOG_ERR("fwrite failed: expected %zu bytes, wrote %zu", strlen(new_content), written);
+        free(new_content);
+        new_content = NULL;
+        fclose(fp);
+        return -1;
+    }
+
+    free(new_content);
+    new_content = NULL;
+    fclose(fp);
+
+    return 0;
+}
+
+int get_esim_profile_remove_status_value(char *key, int *result) {
+    FILE *fp = NULL;
+    char line[STATUS_LINE_LENGTH];
+    char *temp_pos = NULL;
+    char value[5];
+
+    fp = fopen(ESIM_PROFILE_REMOVE_RECORD, "r");
+    if (fp == NULL) {
+        PWL_LOG_ERR("Open esim profile remove status file error!");
         return -1;
     }
 
