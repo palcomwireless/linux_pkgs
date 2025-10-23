@@ -152,7 +152,6 @@ To install services
 - version: 4.5.0
     - pcie device Modem AT control over MBIM
 
-- version: 4.5.1
-    - Dynamically trigger download mode
-    - Avoid MESA issue
-    - Support new MBIM API
+- version: 4.6.0
+    - Add eSIM test profiles erase mechanism
+    - Add one additional supported PCIe SSID. 
