@@ -123,6 +123,9 @@ int g_do_hw_reset_count;
 int g_fw_update_retry_count;
 int g_need_retry_fw_update;
 bool g_need_update = false;
+int g_testprofile_delete_counter = 0;
+int g_testprofile_delete_done = 0;
+int g_esim_profile_chk_result = -1;
 
 static signal_callback_t g_signal_callback;
 static bool register_client_signal_handler(pwlCore *p_proxy);
@@ -163,10 +166,13 @@ pthread_cond_t g_madpt_wait_cond = PTHREAD_COND_INITIALIZER;
 
 // Process percent
 FILE *g_progress_fp = NULL;
+FILE *g_module_config_prompt_fp = NULL;
 int g_progress_percent = 0;
 char g_progress_percent_text[32];
 char g_progress_status[200];
 char g_progress_command[1024];
+char g_module_config_prompt_command[1024];
+char g_module_config_prompt_status[200];
 char env_variable[64] = {0};
 int env_variable_length = 64;
 char set_env_variable[256] = {0};
@@ -815,6 +821,19 @@ void* msg_queue_thread_func(void *args) {
             case PWL_CID_GET_ESIM_STATE:
                 PWL_LOG_DEBUG("[ESIM] %s", message.response);
                 update_esim_enable_state(message.response);
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_CHECK_ESIM_TEST_PROF:
+                if (strstr(message.response, "BCHKTESTPROF")) {
+                    char *colon = strchr(message.response, ':');
+                    if (colon) {
+                        g_esim_profile_chk_result = atoi(colon + 1);
+                        PWL_LOG_DEBUG("PROF: %d", g_esim_profile_chk_result);
+                    }
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_DELETE_ESIM_TEST_PROF:
                 pthread_cond_signal(&g_cond);
                 break;
             default:
@@ -1693,6 +1712,12 @@ int download_process( void *argu_ptr )
     if (set_preferred_carrier() != 0)
         PWL_LOG_ERR("Set preferred carrier fail.");
 
+    // Check Testprofile_Deletion_Done value
+    if (g_testprofile_delete_done == 2) {
+        g_testprofile_delete_done = 0;
+        set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_DONE, g_testprofile_delete_done);
+    }
+
     // Set oem pri version
     if (g_has_update_include_oem_img) {
         sleep(5);
@@ -1986,6 +2011,94 @@ gint get_preferred_carrier()
         return 0;
     }
     return -1;
+}
+
+int do_esim_test_profile_remove_command() {
+    int err, retry = 0;
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        err = 0;
+        send_message_queue(PWL_CID_DELETE_ESIM_TEST_PROF);
+        pthread_mutex_lock(&g_mutex);
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+
+        int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+        if (result == ETIMEDOUT || result != 0) {
+            PWL_LOG_ERR("Time out to remove eSIM test profile, retry");
+            err = 1;
+        }
+        pthread_mutex_unlock(&g_mutex);
+
+        if (err || g_esim_profile_chk_result == -1) {
+            retry++;
+            continue;
+        }
+        return RET_OK;
+    }
+    // Delete profile at command error, abort!
+    g_testprofile_delete_counter = 0;
+    set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_COUNTER, g_testprofile_delete_counter);
+    g_testprofile_delete_done = 2;
+    set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_DONE, g_testprofile_delete_done);
+    return RET_FAILED;
+}
+
+int check_esim_test_profile_process() {
+    PWL_LOG_DEBUG("Check eSIM test profile process");
+    int err, retry = 0;
+    g_esim_profile_chk_result = -1;
+
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        err = 0;
+        send_message_queue(PWL_CID_CHECK_ESIM_TEST_PROF);
+        pthread_mutex_lock(&g_mutex);
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+
+        int result = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+        if (result == ETIMEDOUT || result != 0) {
+            PWL_LOG_ERR("Time out to get eSIM test profile remove result, retry");
+            err = 1;
+        }
+        pthread_mutex_unlock(&g_mutex);
+
+        if (err || g_esim_profile_chk_result == -1) {
+            retry++;
+            continue;
+        }
+        break;
+    }
+
+    // Check eSIM remove status
+    if (g_esim_profile_chk_result == ESIM_PROFILE_DELETE_SUCCESS) {
+        PWL_LOG_DEBUG("eSIM test profile remove success.");
+        g_testprofile_delete_counter = 0;
+        g_testprofile_delete_done = 1;
+        set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_COUNTER, g_testprofile_delete_counter);
+        set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_DONE, g_testprofile_delete_done);
+        return RET_OK;
+    } else {
+        // Test profile remove failed (include at command error)
+        PWL_LOG_DEBUG("eSIM test profile remove failed.");
+
+        if (g_testprofile_delete_counter == 0) {
+            g_testprofile_delete_counter = 2;
+            set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_COUNTER, g_testprofile_delete_counter);
+        } else {
+            g_testprofile_delete_counter--;
+            set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_COUNTER, g_testprofile_delete_counter);
+            if (g_testprofile_delete_counter == 0) {
+                g_testprofile_delete_done = 2;
+                set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_DONE, g_testprofile_delete_done);
+            }
+        }
+        // Send remove esim profile at cmd here
+        if (do_esim_test_profile_remove_command() == RET_OK)
+            restart_madpt_and_fwupdate_service();
+    } 
+    return RET_OK;
 }
 
 int check_oempri_reset_state() {
@@ -2958,8 +3071,72 @@ gint compare_main_fw_version()
     return needUpdate;
 }
 
+void restart_madpt_and_fwupdate_service() {
+    PWL_LOG_DEBUG("Restart madpt and fwupdate service");
+    sleep(3);
+    send_message_queue_with_content(PWL_CID_MADPT_RESTART, "FALSE");
+    if (g_progress_fp != NULL) {
+        fprintf(g_progress_fp, "100\n");
+        fflush(g_progress_fp);
+        pclose(g_progress_fp);
+        g_progress_fp = NULL;
+    }
+    dismiss_module_config_prompt() ;
+    exit(1);
+}
+
+void show_module_config_prompt() {
+    if (g_module_config_prompt_fp != NULL) {
+        pclose(g_module_config_prompt_fp);
+        g_module_config_prompt_fp = NULL;
+    }
+    g_module_config_prompt_fp = popen(g_module_config_prompt_command,"w");
+}
+
+void dismiss_module_config_prompt() {
+    if (g_module_config_prompt_fp != NULL) {
+        fprintf(g_module_config_prompt_fp, "100\n");
+        fflush(g_module_config_prompt_fp);
+        pclose(g_module_config_prompt_fp);
+        g_module_config_prompt_fp = NULL;
+    }
+}
+
 int start_update_process(gboolean is_startup)
 {
+    PWL_LOG_DEBUG("start_update_process");
+
+    // Init dialog env
+    get_env_variable(env_variable, env_variable_length);
+    if (DEBUG) PWL_LOG_DEBUG("%s", set_env_variable);
+
+    // Init module configuration prompt
+    strcpy(g_module_config_prompt_status, "<span font='13'>Module configuration ...\\n\\n</span><span foreground='red' font='16'>Do not shut down or restart</span>");
+    sprintf(g_module_config_prompt_command,
+            "%szenity --progress --text=\"%s\" --percentage=%d --auto-close --no-cancel --width=600 --title=\"%s\"",
+            set_env_variable, g_module_config_prompt_status, 50, "Module configuration");
+
+    if (g_module_config_prompt_fp != NULL) {
+        pclose(g_module_config_prompt_fp);
+        g_module_config_prompt_fp = NULL;
+    }
+
+    // Init esim profile status
+    if (esim_profile_remove_status_init() == 0) {
+        get_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_COUNTER, &g_testprofile_delete_counter);
+        get_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_DONE, &g_testprofile_delete_done);
+        PWL_LOG_DEBUG("testprofile_delete_counter = %d", g_testprofile_delete_counter);
+        PWL_LOG_DEBUG("testprofile_delete_done = %d", g_testprofile_delete_done);
+    }
+
+    // # Check if there has been an attempt to delete the eSIM profile
+    if (g_testprofile_delete_counter != 0) {
+        PWL_LOG_DEBUG("Check eSIM test profile remove result, because Testprofile_Delete_Counter!=0");
+        if ((detect_gpu_status() != -1) && !is_startup) show_module_config_prompt();
+        check_esim_test_profile_process();
+        dismiss_module_config_prompt();
+    }
+
     // Init fw update status file
     if (fw_update_status_init() == 0) {
         // get_fw_update_status_value(FIND_FASTBOOT_RETRY_COUNT, &g_check_fastboot_retry_count);
@@ -2990,9 +3167,7 @@ int start_update_process(gboolean is_startup)
     }
     // Check End
 
-    get_env_variable(env_variable, env_variable_length);
-
-    if (DEBUG) PWL_LOG_DEBUG("%s", set_env_variable);
+    // Init modem update progress prompt
     strcpy(g_progress_status, "<span font='13'>Downloading ...\\n\\n</span><span foreground='red' font='16'>Do not shut down or restart</span>");
     sprintf(g_progress_command,
             "%szenity --progress --text=\"%s\" --percentage=%d --auto-close --no-cancel --width=600 --title=\"%s\"",
@@ -3143,6 +3318,18 @@ int start_update_process(gboolean is_startup)
             g_progress_fp = NULL;
         }
         return -1;
+    } else {
+        // Check eSIM profile Testprofile_Deletion_Done here
+        if (g_testprofile_delete_done == 0) {
+            PWL_LOG_DEBUG("Check eSIM test profile remove result, because Testprofile_Deletion_Done==0");
+            if ((detect_gpu_status() != -1) && !is_startup) show_module_config_prompt();
+            check_esim_test_profile_process();
+            dismiss_module_config_prompt();
+        } else if (g_testprofile_delete_done == 1) {
+            PWL_LOG_DEBUG("eSIM test profile already removed.");
+        } else {
+            PWL_LOG_DEBUG("eSIM test profile remove failed, waiting for next retry opportunity");
+        }
     }
 
     // === Setup download parameter ===

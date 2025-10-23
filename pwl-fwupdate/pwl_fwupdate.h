@@ -175,7 +175,10 @@ gint get_carrier_id();
 gint get_cxp_reboot_flag();
 void remove_flash_data(int type);
 void update_esim_enable_state(char *esim_state);
+void restart_madpt_and_fwupdate_service();
+void show_module_config_prompt();
+void dismiss_module_config_prompt();
 int get_esim_enable_state();
-
-
+int check_esim_test_profile_process();
+int do_esim_test_profile_remove();
 #endif
