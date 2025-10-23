@@ -60,7 +60,9 @@ gchar* at_cmd_map[] = {
     "at*cdpvid?",
     "at+esbp?",
     "at*mresetoempri=1",
-    "at+esimenable?"
+    "at+esimenable?",
+    "at*bchktestprof?",
+    "at*bdeltestprof=1"
 };
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -566,6 +568,14 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 break;
             case PWL_CID_GET_ESIM_STATE:
                 PWL_LOG_DEBUG("[DPV] esim: %s", g_response);
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_CHECK_ESIM_TEST_PROF:
+                if (DEBUG) PWL_LOG_DEBUG("Check eSIM test profile");
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_DELETE_ESIM_TEST_PROF:
+                if (DEBUG) PWL_LOG_DEBUG("Delete eSIM test profile");
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
             default:
