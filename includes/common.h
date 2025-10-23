@@ -39,6 +39,7 @@
 #define FW_UPDATE_STATUS_RECORD         "/opt/pwl/firmware/fw_update_status"
 // #define HAS_BEEN_FW_UPDATE_FLAG         "/opt/pwl/has_been_fw_update"
 #define BOOTUP_STATUS_RECORD            "/opt/pwl/bootup_status"
+#define ESIM_PROFILE_REMOVE_RECORD      "/opt/pwl/esim_profile_remove_status"
 #define FIND_FASTBOOT_RETRY_COUNT       "Find_fastboot_retry_count"
 #define WAIT_MODEM_PORT_RETRY_COUNT     "Wait_modem_port_retry_count"
 #define WAIT_AT_PORT_RETRY_COUNT        "Wait_at_port_retry_count"
@@ -48,6 +49,10 @@
 #define JP_FCC_CONFIG_COUNT             "jp_fcc_config_count"
 #define BOOTUP_FAILURE_COUNT            "Bootup_failure_count"
 #define ESIM_ENABLE_STATE               "esim_enable"
+#define ESIM_TESTPROFILE_DELETE_COUNTER "Testprofile_Delete_Counter"
+#define ESIM_TESTPROFILE_DELETE_DONE    "Testprofile_Delete_Done"
+#define ESIM_PROFILE_DELETE_SUCCESS      1
+#define ESIM_PROFILE_DELETE_FAIL         0
 
 #define DEVICE_PACKAGE_VERSION_LENGTH   15
 #define FW_UPDATE_RETRY_TH              1
@@ -168,6 +173,8 @@ typedef enum {
     PWL_CID_GET_CARRIER_ID,
     PWL_CID_GET_OEM_PRI_RESET_STATE,
     PWL_CID_GET_ESIM_STATE,
+    PWL_CID_CHECK_ESIM_TEST_PROF,
+    PWL_CID_DELETE_ESIM_TEST_PROF,
     PWL_CID_MADPT_RESTART,
     PWL_CID_SETUP_JP_FCC_CONFIG,
     PLW_CID_MAX_MADPT,
@@ -214,6 +221,8 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_CARRIER_ID] = "GET_CARRIER_ID",
     [PWL_CID_GET_OEM_PRI_RESET_STATE] = "GET_OEM_PRI_RESET_STATE",
     [PWL_CID_GET_ESIM_STATE] = "GET_ESIM_STATE",
+    [PWL_CID_CHECK_ESIM_TEST_PROF] = "CHK_ESIM_TEST_PROF",
+    [PWL_CID_DELETE_ESIM_TEST_PROF] = "DEL_ESIM_TEST_PROF",
     [PWL_CID_MADPT_RESTART] = "MADPT_RESTART",
     [PWL_CID_SETUP_JP_FCC_CONFIG] = "SETUP_JP_FCC_CONFIG",
 };
@@ -290,6 +299,9 @@ gboolean pwl_set_command_available();
 int fw_update_status_init();
 int set_fw_update_status_value(char *key, int value);
 int get_fw_update_status_value(char *key, int *result);
+int esim_profile_remove_status_init();
+int set_esim_profile_remove_status_value(char *key, int value);
+int get_esim_profile_remove_status_value(char *key, int *result);
 int bootup_status_init();
 int set_bootup_status_value(char *key, int value);
 int get_bootup_status_value(char *key, int *result);
