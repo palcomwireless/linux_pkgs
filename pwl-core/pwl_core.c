@@ -518,6 +518,34 @@ static gboolean gpio_reset_method(pwlCore     *object,
 //    return TRUE;
 //}
 
+int show_gpio_reset_failed() {
+    char env_variable[256] = {0};
+    FILE *fp = NULL;
+    fp = popen("find /run/user -name \"Xauthority\" 2>/dev/null | head -1", "r");
+    if (fp) {
+        size_t nread = fread(env_variable, sizeof(char), sizeof(env_variable)-1, fp);
+        pclose(fp);
+    }
+
+    env_variable[strcspn(env_variable, "\n")] = '\0';
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+        "export DISPLAY=:0; "
+        "export XDG_CURRENT_DESKTOP=GNOME; "
+        "export XAUTHORITY=%s; "
+        "zenity --error --text='Reset failed.' --title='Error'",
+        env_variable);
+        int ret = system(cmd);
+    if (ret == -1) {
+        PWL_LOG_ERR("system() call failed");
+        return -1;
+    } else {
+        int exit_code = WEXITSTATUS(ret);
+        PWL_LOG_INFO("zenity exit code: %d", exit_code);
+        return exit_code;
+    }
+}
+
 static gboolean hw_reset() {
     PWL_LOG_DEBUG("!!=== Do GPIO reset ===!!");
     int ret = 0;
@@ -562,6 +590,12 @@ static gboolean hw_reset() {
 
     if(i == search_array_len){
         PWL_LOG_ERR("[GPIO] gpio reset don't find skuid form table");
+        return -1;
+    }
+
+    if (gpio == -1) {
+        PWL_LOG_ERR("[GPIO] GPIO not support yet, abort!");
+        show_gpio_reset_failed();
         return -1;
     }
 
@@ -647,6 +681,11 @@ int gpio_init() {
             gpio = g_skuid_to_gpio[i].gpio;
             break;
         }
+    }
+
+    if (gpio == -1) {
+        PWL_LOG_ERR("[GPIO] gpio not support yet, abort!");
+        return -1;
     }
 
     if (i == search_array_len) {
