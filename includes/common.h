@@ -281,6 +281,13 @@ enum RETURNS {
     RET_OK = 0
 };
 
+typedef struct {
+    char* ssid;
+    char* sku_id;
+} SsidSkuMap;
+extern const SsidSkuMap ssid_sku_table[];
+extern size_t ssid_sku_table_count;
+
 gboolean pwl_discard_old_messages(const gchar *path);
 gboolean get_host_info(const gchar *cmd, gchar *buff, gint buff_len);
 gboolean filter_host_info_header(const gchar *header, gchar *info, gchar *buff, gint buff_len);
