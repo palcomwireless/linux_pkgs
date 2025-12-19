@@ -154,4 +154,7 @@ To install services
 
 - version: 4.6.0
     - Add eSIM test profiles erase mechanism
-    - Add one additional supported PCIe SSID. 
+    - Add one additional supported PCIe SSID.
+
+- version: 4.6.1
+    - Add more support list
