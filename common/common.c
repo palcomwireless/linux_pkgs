@@ -30,15 +30,107 @@ char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
                         "0CE8", "0CF9", "0CF5", "0CF6", "0D5F",
                         "0D60", "0D5C", "0D5E", "0D47", "0D48",
                         "0D49", "0D61", "0D4D", "0D4E", "0D4F",
-                        "0D65" };
+                        "0D65",
+                        //=== IOT ===
+                        "0DF4", "0E39", "0E35", "0E1C", "0E38",
+                        "0E1D", "0DF2", "0E33", "0E1F", "0E26",
+                        "0E25", "0E23", "0E24", "0E29", "0E31",
+                        "0E3A", "0E3C", "0DF5", "0E40", "0E36",
+                        "0E1A", "0E1B", "0E1E", "0DF3", "0E34",
+                        "0E20", "0E28", "0E22", "0E21", "0E27",
+                        "0E2A", "0E32", "0E3B", "0E3D",
+                     };
 
 char *pcie_devices[] = { "0CF4", "0CF5", "0CDD", "0CF1", "0CDB",
-                         "0D4D", "0D4E", "0D4F", "0D65", "0DBD" };
+                         "0D4D", "0D4E", "0D4F", "0D65", "0DBD",
+                         //======
+                         "0E1A", "0E1B", "0E1C", "0E38", "0E1D",
+                         "0E1E", "0DF2", "0DF3", "0E22", "0E21",
+                         "0E25", "0E23", "0E24", "0E27", "0E29",
+                         "0E31", "0E2A", "0E32", "0E1F", "0E20",
+                         "0E26", "0E28", "0E33", "0E3C", "0E34",
+                         "0E3D", "0E3A", "0E3B", "0DF2", "0DF3",
+                        };
+
+
+const SsidSkuMap ssid_sku_table[] = {
+    { "0CBD", "4131002" },
+    { "0CC1", "4131003" },
+    { "0CC4", "4131003" },
+    { "0CB5", "4131001" },
+    { "0CB7", "4131001" },
+    { "0CB2", "4131001" },
+    { "0CB3", "4131001" },
+    { "0CB4", "4131001" },
+    { "0CB9", "4131001" },
+    { "0CBA", "4131001" },
+    { "0CBB", "4131001" },
+    { "0CBC", "4131001" },
+    { "0CD9", "4131001" },
+    { "0CDA", "4131001" },
+    { "0CF4", "4131007" },
+    { "0CE8", "4131009" },
+    { "0CF9", "4131009" },
+    { "0CF5", "4131008" },
+    { "0CF6", "4131008" },
+    { "0D5F", "4131009" },
+    { "0D60", "4131009" },
+    { "0D5C", "4131009" },
+    { "0D5E", "4131009" },
+    { "0D47", "4131007" },
+    { "0D48", "4131007" },
+    { "0D49", "4131007" },
+    { "0D61", "4131007" },
+    { "0D4D", "4131008" },
+    { "0D4E", "4131008" },
+    { "0D4F", "4131008" },
+    { "0D65", "4131008" },
+    //=== IOT ===
+    { "0DF4", "4131023" },
+    { "0E39", "4131021" },
+    { "0E35", "4131021" },
+    { "0E1C", "4131021" },
+    { "0E38", "4131021" },
+    { "0E1D", "4131022" },
+    { "0DF2", "4131021" },
+    { "0E33", "4131021" },
+    { "0E1F", "4131021" },
+    { "0E26", "4131021" },
+    { "0E25", "4131021" },
+    { "0E23", "4131021" },
+    { "0E24", "4131022" },
+    { "0E29", "4131023" },
+    { "0E31", "4131021" },
+    { "0E3A", "4131023" },
+    { "0E3C", "4131021" },
+    { "0DF5", "4131001" },
+    { "0E40", "4131026" },
+    { "0E36", "4131026" },
+    { "0E1A", "4131024" },
+    { "0E1B", "4131001" },
+    { "0E1E", "4131026" },
+    { "0DF3", "4131026" },
+    { "0E34", "4131026" },
+    { "0E20", "4131026" },
+    { "0E28", "4131026" },
+    { "0E22", "4131024" },
+    { "0E21", "4131001" },
+    { "0E27", "4131026" },
+    { "0E2A", "4131001" },
+    { "0E32", "4131026" },
+    { "0E3B", "4131001" },
+    { "0E3D", "4131026" },
+};
+size_t ssid_sku_table_count = sizeof(ssid_sku_table) / sizeof(ssid_sku_table[0]);
 
 gchar* usbid_info[] = {
     "413c:8217",
     "413c:8218",
     "413c:8219",
+    //===IOT===
+    "413c:81ea",
+    "413c:81eb",
+    "413c:81ec",
 };
 #define USBID_LIST_COUNT        (sizeof(usbid_info) / sizeof(usbid_info[0]))
 
@@ -57,8 +149,12 @@ gchar* pcieid_info[] = {
 #define PCIEID_LIST_COUNT       (sizeof(pcieid_info) / sizeof(pcieid_info[0]))
 
 #define SUBSYS_ID_QUERY_CMD "udevadm info --query=all --path=/sys/bus/pci/devices/%s | grep PCI_SUBSYS_ID="
-#define SUBSYS "1028:5933"
-
+// #define SUBSYS "1028:5933"
+static const char *SUBSYS_LIST[] = {
+    "1028:5933",
+    "1028:5966",
+    NULL
+};
 
 gboolean pwl_discard_old_messages(const gchar *path) {
     mqd_t mq;
@@ -239,14 +335,16 @@ gboolean pwl_module_device_id_exist(pwl_device_type_t type, gchar *id) {
                 char* subsys = strstr(subsysid, (char *)"PCI_SUBSYS_ID=");
                 id = subsys + strlen((char *)"PCI_SUBSYS_ID=");
                 if (DEBUG) PWL_LOG_DEBUG("[Notice] id: %s", id);
-                if (strncmp(id, SUBSYS, strlen(SUBSYS)) == 0) {
-                    if (g_subsysid == NULL) {
-                        g_subsysid = malloc(20);
-                        memset(g_subsysid, 0, 20);
-                        strcpy(g_subsysid, id);
-                        if (DEBUG) PWL_LOG_DEBUG("[Notice] g_subsysid: %s", g_subsysid);
+                for (int i = 0; SUBSYS_LIST[i] != NULL; i++) {
+                    if (strncmp(id, SUBSYS_LIST[i], strlen(SUBSYS_LIST[i])) == 0) {
+                        if (g_subsysid == NULL) {
+                            g_subsysid = malloc(20);
+                            memset(g_subsysid, 0, 20);
+                            strcpy(g_subsysid, id);
+                            if (DEBUG) PWL_LOG_DEBUG("[Notice] g_subsysid: %s", g_subsysid);
+                        }
+                        return TRUE;
                     }
-                    return TRUE;
                 }
             }
 
