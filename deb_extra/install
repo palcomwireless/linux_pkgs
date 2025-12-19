@@ -6,7 +6,7 @@ release_dir=${build_dir}/release
 dpkg_dir=${release_dir}/dpkg
 services_dir=${dpkg_dir}/opt/pwl
 
-vidpid_list=('413c:8217' '413c:8218' '413c:8219' '14c0:4d75')
+vidpid_list=('413c:8217' '413c:8218' '413c:8219' '14c0:4d75' '413c:81ea' '413c:81eb' '413c:81ec')
 
 function copy_files_to_release()
 {
