@@ -24,13 +24,18 @@
 static pwl_device_type_t g_device_type = PWL_DEVICE_TYPE_UNKNOWN;
 static char *g_subsysid;
 
+gboolean g_is_iot_ssid = FALSE;
+gboolean g_is_iot_fw = FALSE;
+
+#define IOT_START_INDEX     31
+
 char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
                         "0CB2", "0CB3", "0CB4", "0CB9", "0CBA",
                         "0CBB", "0CBC", "0CD9", "0CDA", "0CF4",
                         "0CE8", "0CF9", "0CF5", "0CF6", "0D5F",
                         "0D60", "0D5C", "0D5E", "0D47", "0D48",
                         "0D49", "0D61", "0D4D", "0D4E", "0D4F",
-                        "0D65",
+                        "0D65", //index = 30
                         //=== IOT ===
                         "0DF4", "0E39", "0E35", "0E1C", "0E38",
                         "0E1D", "0DF2", "0E33", "0E1F", "0E26",
@@ -103,22 +108,22 @@ const SsidSkuMap ssid_sku_table[] = {
     { "0E31", "4131021" },
     { "0E3A", "4131023" },
     { "0E3C", "4131021" },
-    { "0DF5", "4131001" },
+    { "0DF5", "4131027" },
     { "0E40", "4131026" },
     { "0E36", "4131026" },
     { "0E1A", "4131024" },
-    { "0E1B", "4131001" },
+    { "0E1B", "4131025" },
     { "0E1E", "4131026" },
     { "0DF3", "4131026" },
     { "0E34", "4131026" },
     { "0E20", "4131026" },
     { "0E28", "4131026" },
     { "0E22", "4131024" },
-    { "0E21", "4131001" },
+    { "0E21", "4131025" },
     { "0E27", "4131026" },
-    { "0E2A", "4131001" },
+    { "0E2A", "4131027" },
     { "0E32", "4131026" },
-    { "0E3B", "4131001" },
+    { "0E3B", "4131027" },
     { "0E3D", "4131026" },
 };
 size_t ssid_sku_table_count = sizeof(ssid_sku_table) / sizeof(ssid_sku_table[0]);
@@ -355,6 +360,65 @@ gboolean pwl_module_device_id_exist(pwl_device_type_t type, gchar *id) {
     return FALSE;
 }
 
+int get_fw_main_version(const char *input) {
+    char *copy = strdup(input);
+    char *token = strtok(copy, "_");
+    int index = 0, version = -1;
+
+    while (token != NULL) {
+        if (index == 1) {
+            char *subtoken = strtok(token, ".");
+            int subindex = 0;
+            while (subtoken != NULL) {
+                if (subindex == 2) {
+                    version = atoi(subtoken);
+                    break;
+                }
+                subtoken = strtok(NULL, ".");
+                subindex++;
+            }
+            break;
+        }
+        token = strtok(NULL, "_");
+        index++;
+    }
+    free(copy);
+    return version;
+}
+
+gboolean is_iot_image(const char *image) {
+    int version = -1;
+    version = get_fw_main_version(image);
+    PWL_LOG_DEBUG("Image ver: %d", version);
+    if (version >= 50) return TRUE;
+    else return FALSE;
+}
+
+gboolean is_iot_module_fw() {
+    gchar *response = NULL;
+    if (pwl_set_command("at*bfwver", &response)) {
+        if (response != NULL && strstr(response, "OK") != NULL) {
+            if (DEBUG) PWL_LOG_DEBUG("fwver: %s", response);
+
+            // Split version from at response
+            int version = get_fw_main_version(response);
+            if (DEBUG) PWL_LOG_DEBUG("fw main version: %d", version);
+            if (version >= 50)
+                g_is_iot_fw = TRUE;
+            else
+                g_is_iot_fw = FALSE;
+        }
+    }
+    if (response) {
+        free(response);
+    }
+    return g_is_iot_fw;
+}
+
+gboolean is_iot_ssid() {
+    return g_is_iot_ssid;
+}
+
 pwl_device_type_t pwl_get_device_type() {
     gchar skuid[PWL_MAX_SKUID_SIZE];
 
@@ -371,6 +435,13 @@ pwl_device_type_t pwl_get_device_type() {
                 if (pwl_module_device_id_exist(PWL_DEVICE_TYPE_USB, usbid_info[j])) {
                     PWL_LOG_INFO("Device type usb");
                     g_device_type = PWL_DEVICE_TYPE_USB;
+
+                    // Check if IOT SSID
+                    if (i >= IOT_START_INDEX)
+                        g_is_iot_ssid = TRUE;
+                    else
+                        g_is_iot_ssid = FALSE;
+
                     return PWL_DEVICE_TYPE_USB;
                 }
             }
@@ -979,10 +1050,55 @@ int remove_folder(char *path) {
 }
 
 void trim_string(char *string) {
-    // Trim right space
-    while (isspace(string[0])) {
-        memmove(string, string + 1, strlen(string));
+    char *start = string;
+    char *end;
+
+    // Remove left space
+    while (*start && isspace((unsigned char)*start)) {
+        start++;
     }
-    // Trim left space
-    string[strcspn(string, " ")] = 0;
+
+    // Handle all-space string
+    if (*start == '\0') {
+        string[0] = '\0';
+        return;
+    }
+
+    // Find last non-space character
+    end = start + strlen(start) - 1;
+    while (end > start && isspace((unsigned char)*end)) {
+        end--;
+    }
+
+    *(end + 1) = '\0';
+
+    // Shift trimmed string to buffer start
+    memmove(string, start, end - start + 2);
+}
+
+int split_backup_sn_imei(const char *input, char *sn, char *imei) {
+    const char *sep = strchr(input, ';');
+    if (!sep) {
+        sn[0] = '\0';
+        imei[0] = '\0';
+        PWL_LOG_ERR("Missing ';'");
+        return RET_FAILED;
+    }
+
+    // Split SN
+    size_t sn_len = sep - input;
+    strncpy(sn, input, sn_len);
+    sn[sn_len] = '\0';
+    trim_string(sn);
+
+    // Split IMEI
+    strncpy(imei, sep + 1, IMEI_MAX_LENGTH - 1);
+    imei[IMEI_MAX_LENGTH - 1] = '\0';
+    trim_string(imei);
+
+    return RET_OK;
+}
+
+void update_cid_record(pwl_cid_record_t *cid_table, pwl_cid_t cid, pwl_cid_status_t status) {
+    cid_table[cid].status = status;
 }
