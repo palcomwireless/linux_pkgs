@@ -112,6 +112,13 @@
 #define GET_TEST_SKU_ID        0
 #define GET_TEST_SIM_CARRIER   0
 
+#define MESSAGE_QUEUE_ACTION_GET_ATI_INFO           0
+#define MESSAGE_QUEUE_ACTION_BACKUP_SN_IMEI         1
+#define MESSAGE_QUEUE_ACTION_GET_BACKUP_SN_IMEI     2
+#define MESSAGE_QUEUE_ACTION_RESTORE_SN             3
+#define MESSAGE_QUEUE_ACTION_RESTORE_IMEI           4
+
+
 //GPIO Reset 
 #define ENABLE_GPIO_RESET               1
 
@@ -137,14 +144,22 @@ typedef enum {
     OEMPRI_READ_MAX          = 10
 } oempri_read_cause_e_type;
 
-int start_update_process(gboolean is_startup);
+int start_update_process(gboolean is_startup, gboolean efs_recovery_mode);
 gint set_preferred_carrier();
 gint del_tune_code();
 gint set_oem_pri_version();
 gint get_ati_info();
+gint get_sn_and_imei();
+gint efs_recovery_process();
+gint prepare_recovery_image();
+gint post_message_queue_action(int action);
 char *get_test_sku_id();
 void signal_callback_retry_fw_update(const gchar* arg);
 void registerSignalCallback(signal_callback_t *callback);
+void arrange_fw_image();
+void arrange_carrier_pri_image();
+void arrange_oem_pri_image();
+void convert_oem_ver_to_dpv();
 int get_oem_version_from_file(char *oem_file_name, char *oem_version);
 int check_oempri_reset_state();
 int get_oempri_reset_state(char *response);

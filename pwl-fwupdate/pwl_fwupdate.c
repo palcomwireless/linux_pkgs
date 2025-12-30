@@ -73,6 +73,7 @@ static GMainLoop *gp_loop = NULL;
 static pwlCore *gp_proxy = NULL;
 static gulong g_ret_signal_handler[RET_SIGNAL_HANDLE_SIZE];
 
+pwl_cid_record_t g_pwl_cid_map[PWL_CID_MAX];
 char g_image_file_fw_list[MAX_DOWNLOAD_FW_IMAGES][MAX_PATH];
 char g_image_file_carrier_list[MAX_DOWNLOAD_PRI_IMAGES][MAX_PATH];
 char g_image_file_oem_list[MAX_DOWNLOAD_OEM_IMAGES][MAX_PATH];
@@ -89,6 +90,10 @@ char g_device_package_ver[DEVICE_PACKAGE_VERSION_LENGTH];
 char g_current_fw_ver[FW_VERSION_LENGTH] = {0};
 char g_oem_pri_ver[OEM_PRI_VERSION_LENGTH];
 char g_carrier_id[10] = {0};
+char g_ati_info[MAX_COMMAND_LEN] = {0};
+char g_sn[SN_MAX_LENGTH] = {0};
+char g_imei[IMEI_MAX_LENGTH] = {0};
+
 gboolean g_need_cxp_reboot = FALSE;
 gboolean gb_del_tune_code_ret = FALSE;
 gboolean gb_set_oem_pri_ver_ret = FALSE;
@@ -534,7 +539,7 @@ void* msg_queue_thread_func(void *args) {
         bytes_read = mq_receive(mq, (gchar *)&message, sizeof(message), NULL);
 
         print_message_info(&message);
-
+        update_cid_record(g_pwl_cid_map, message.pwl_cid, message.status);
         switch (message.pwl_cid)
         {
             /* CID request from others */
@@ -545,7 +550,11 @@ void* msg_queue_thread_func(void *args) {
                 pthread_cond_signal(&g_cond);
                 break;
             case PWL_CID_GET_ATI:
-                if (DEBUG && message.status == PWL_CID_STATUS_OK) PWL_LOG_DEBUG("CID ATI: %s", message.response);
+                if (message.status == PWL_CID_STATUS_OK) {
+                    PWL_LOG_DEBUG("CID ATI: %s", message.response);
+                    strncpy(g_ati_info, message.response, MAX_COMMAND_LEN - 1);
+                    g_ati_info[MAX_COMMAND_LEN - 1] = '\0';
+                }
                 pthread_cond_signal(&g_cond);
                 // pthread_exit(NULL);
                 break;
@@ -775,6 +784,24 @@ void* msg_queue_thread_func(void *args) {
             case PWL_CID_DELETE_ESIM_TEST_PROF:
                 pthread_cond_signal(&g_cond);
                 break;
+            case PWL_CID_BACKUP_SN_IMEI:
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_GET_BACKUP_SN_IMEI:
+                if (message.status == PWL_CID_STATUS_OK && strlen(message.response) > 0) {
+                    split_backup_sn_imei(message.response, g_sn, g_imei);
+                    if (DEBUG) PWL_LOG_DEBUG("Backup sn: %s, imei: %s", g_sn, g_imei);
+                }
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_RESTORE_SN:
+                PWL_LOG_DEBUG("Restore SN, status: %d, response: %s", message.status, message.response);
+                pthread_cond_signal(&g_cond);
+                break;
+            case PWL_CID_RESTORE_IMEI:
+                PWL_LOG_DEBUG("Restore IMEI, status: %d, response: %s", message.status, message.response);
+                pthread_cond_signal(&g_cond);
+                break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
                 break;
@@ -790,7 +817,7 @@ void* monitor_retry_func(void *args) {
         if (g_retry_fw_update) {
             g_retry_fw_update = FALSE;
             PWL_LOG_INFO("Retry firmware update...");
-            start_update_process(FALSE);
+            start_update_process(FALSE, FALSE);
         }
     }
 
@@ -1369,8 +1396,7 @@ int waiting_modem_download_port( fdtl_data_t *fdtl_data )
     return update_count_down;
 }
 
-int download_process( void *argu_ptr )
-{
+int download_process( void *argu_ptr, gboolean efs_recovery_mode ) {
     int count;
     int rtn;
     char output_message[1024];
@@ -1634,12 +1660,15 @@ int download_process( void *argu_ptr )
 
     // Restart MADPT
     if (g_has_update_include_oem_img) {
-        send_message_queue_with_content(PWL_CID_MADPT_RESTART, "TRUE");
+        if (efs_recovery_mode)
+            send_message_queue_with_content(PWL_CID_MADPT_RESTART, "RECOVERY");
+        else
+            send_message_queue_with_content(PWL_CID_MADPT_RESTART, "TRUE");
     } else {
         send_message_queue_with_content(PWL_CID_MADPT_RESTART, "FALSE");
     }
 
-    if (!cond_wait(&g_madpt_wait_mutex, &g_madpt_wait_cond, 120)) {
+    if (!cond_wait(&g_madpt_wait_mutex, &g_madpt_wait_cond, 300)) {
         PWL_LOG_ERR("timed out or error for madpt restart");
     } else {
         PWL_LOG_INFO("Modem back online");
@@ -1648,13 +1677,24 @@ int download_process( void *argu_ptr )
     // Set preferred carrier
     // TODO record preferred carrier and download status to ROM file.
     update_progress_dialog(5, "Set preferred carrier...", NULL);
-    if (set_preferred_carrier() != 0)
-        PWL_LOG_ERR("Set preferred carrier fail.");
+
+    if (efs_recovery_mode == FALSE) {
+        if (set_preferred_carrier() != 0)
+            PWL_LOG_ERR("Set preferred carrier fail.");
+    }
 
     // Check Testprofile_Deletion_Done value
     if (g_testprofile_delete_done == 2) {
         g_testprofile_delete_done = 0;
         set_esim_profile_remove_status_value(ESIM_TESTPROFILE_DELETE_DONE, g_testprofile_delete_done);
+    }
+
+    // Restore SN and IMEI (in efs recovery mode)
+    if (efs_recovery_mode) {
+        // Restore backup SN
+        if (post_message_queue_action(MESSAGE_QUEUE_ACTION_RESTORE_SN) != RET_OK) PWL_LOG_ERR("Restore SN error!");
+        // Restore backup IMEI
+        if (post_message_queue_action(MESSAGE_QUEUE_ACTION_RESTORE_IMEI) != RET_OK) PWL_LOG_ERR("Restore IMEI error!");
     }
 
     // Set oem pri version
@@ -1796,7 +1836,7 @@ INOTIFY_AGAIN:
                             sleep(2);
                             if (extract_update_files() == 0) {
                                 PWL_LOG_DEBUG("Start update process");
-                                start_update_process(FALSE);
+                                start_update_process(FALSE, FALSE);
                             }
                         } else if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
                             if (g_is_fw_update_processing == NOT_IN_FW_UPDATE_PROCESSING) {
@@ -2482,6 +2522,39 @@ gint get_ati_info()
     return -1;
 }
 
+gint get_sn_and_imei() {
+    PWL_LOG_DEBUG("Get SN and IMEI from ATI info");
+    if (strlen(g_ati_info) > 0) {
+        // Get IMEI
+        const char* imei_ptr = strstr(g_ati_info, "IMEI:");
+        if (imei_ptr) {
+            imei_ptr += strlen("IMEI:");
+            size_t len = strcspn(imei_ptr, "\n");
+            if (len >= sizeof(g_imei)) len = sizeof(g_imei) - 1;
+            strncpy(g_imei, imei_ptr, len);
+            g_imei[len] = '\0';
+        }
+        trim_string(g_imei);
+
+        // Get CEI SN
+        const char* sn_ptr = strstr(g_ati_info, "CEI SN:");
+        if (sn_ptr) {
+            sn_ptr += strlen("CEI SN:");
+            size_t len = strcspn(sn_ptr, "\n");
+            if (len >= sizeof(g_sn)) len = sizeof(g_sn) - 1;
+            strncpy(g_sn, sn_ptr, len);
+            g_sn[len] = '\0';
+        }
+        trim_string(g_sn);
+    } else {
+        PWL_LOG_ERR("Missing ATI info, abort!");
+        return RET_FAILED;
+    }
+
+    if (DEBUG) PWL_LOG_DEBUG("imei: %s, len: %ld, sn: %s, len: %ld", g_imei, strlen(g_imei), g_sn, strlen(g_sn));
+    return RET_OK;
+}
+
 gboolean get_oem_pri_version() {
     int err, retry = 0;
     memset(g_oem_pri_ver, 0, sizeof(g_oem_pri_ver));
@@ -2628,46 +2701,38 @@ int get_esim_enable_state() {
     return RET_FAILED;
 }
 
-gint setup_download_parameter(fdtl_data_t  *fdtl_data)
-{
-    g_device_count = 1;
-    strcpy(g_diag_modem_port[0], "/dev/cdc-wdm*");
-    char *temp_pref_carrier = NULL;
-
-    // Compose image list
-    g_image_file_count = 0;
-    if (g_only_flash_oem_image == FALSE) {
-        // fw
-        if (g_has_update_include_fw_img) {
-            for (int m = 0; m < MAX_DOWNLOAD_FW_IMAGES; m++) {
-                if (strstr(g_image_file_fw_list[m], ".dfw")) {
-                    strcpy(g_image_file_list[m], g_image_file_fw_list[m]);
-                    g_image_file_count++;
-                }
-            }
-        }
-
-        // carrie pri
-        int prefered_index = 0;
-        for (int m = 0; m < MAX_DOWNLOAD_PRI_IMAGES; m++) {
-            if (strstr(g_image_file_carrier_list[m], ".cfw")) {
-                if (strstricase(g_image_file_carrier_list[m], g_pref_carrier))
-                    prefered_index = g_image_file_count;
-                strcpy(g_image_file_list[g_image_file_count], g_image_file_carrier_list[m]);
+void arrange_fw_image() {
+    if (g_has_update_include_fw_img) {
+        for (int m = 0; m < MAX_DOWNLOAD_FW_IMAGES; m++) {
+            if (strstr(g_image_file_fw_list[m], ".dfw")) {
+                strcpy(g_image_file_list[m], g_image_file_fw_list[m]);
                 g_image_file_count++;
             }
         }
+    }
+}
 
-        // Put prefered carrier image to last one
-        temp_pref_carrier = (char *)malloc(strlen(g_image_file_list[prefered_index]) + 1);
-        memset(temp_pref_carrier, 0, strlen(g_image_file_list[prefered_index]) + 1);
-        strcpy(temp_pref_carrier, g_image_file_list[prefered_index]);
-        strcpy(g_image_file_list[prefered_index], g_image_file_list[g_image_file_count - 1]);
-        strcpy(g_image_file_list[g_image_file_count - 1], temp_pref_carrier);
+void arrange_carrier_pri_image() {
+    char *temp_pref_carrier = NULL;
+    int prefered_index = 0;
+    for (int m = 0; m < MAX_DOWNLOAD_PRI_IMAGES; m++) {
+        if (strstr(g_image_file_carrier_list[m], ".cfw")) {
+            if (strstricase(g_image_file_carrier_list[m], g_pref_carrier))
+                prefered_index = g_image_file_count;
+            strcpy(g_image_file_list[g_image_file_count], g_image_file_carrier_list[m]);
+            g_image_file_count++;
+        }
     }
 
-    // g_image_file_count++;
-    // oem pri
+    // Put prefered carrier image to last one
+    temp_pref_carrier = (char*)malloc(strlen(g_image_file_list[prefered_index]) + 1);
+    memset(temp_pref_carrier, 0, strlen(g_image_file_list[prefered_index]) + 1);
+    strcpy(temp_pref_carrier, g_image_file_list[prefered_index]);
+    strcpy(g_image_file_list[prefered_index], g_image_file_list[g_image_file_count - 1]);
+    strcpy(g_image_file_list[g_image_file_count - 1], temp_pref_carrier);
+}
+
+void arrange_oem_pri_image() {
     g_has_update_include_oem_img = FALSE;
     g_oem_sku_id = get_oem_sku_id(g_skuid);
     for (int m = 0; m < MAX_DOWNLOAD_OEM_IMAGES; m++) {
@@ -2689,6 +2754,82 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
                 g_has_update_include_oem_img = FALSE;
             }
         }
+    }
+}
+
+void convert_oem_ver_to_dpv() {
+    memset(g_device_package_ver, 0, DEVICE_PACKAGE_VERSION_LENGTH);
+    if (strlen(g_image_file_oem_list[0]) > 0) {
+        char oem_version[30];
+        char* temp_oem_pri_ver;
+
+        memset(oem_version, 0, sizeof(oem_version));
+        get_oem_version_from_file(g_image_file_list[g_image_file_count - 1], oem_version);
+
+        if (DEBUG) {
+            PWL_LOG_DEBUG("Convert oem version to device package version");
+            PWL_LOG_DEBUG("oem_version: %s", oem_version);
+        }
+
+        if (strlen(oem_version) > 0) {
+            temp_oem_pri_ver = (char*)malloc(strlen(oem_version));
+            memset(temp_oem_pri_ver, 0, strlen(oem_version));
+            strcat(g_device_package_ver, "DPV00.");
+            char ch;
+            for (int i = 0; i < strlen(oem_version); i++) {
+                if (oem_version[i] == '.' || oem_version[i] == '_') {
+                    continue;
+                } else {
+                    ch = oem_version[i];
+                    // printf("%c", ch);
+                    strncat(temp_oem_pri_ver, &ch, 1);
+                }
+            }
+            int shift_index = 0;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 2; j++) {
+                    ch = temp_oem_pri_ver[shift_index + j];
+                    // printf("%c", ch);
+                    strncat(g_device_package_ver, &ch, 1);
+                    if (j == 1 && i < 2) {
+                        ch = '.';
+                        strncat(g_device_package_ver, &ch, 1);
+                    }
+                }
+                shift_index += 2;
+            }
+            free(temp_oem_pri_ver);
+        } else {
+            strcpy(g_device_package_ver, "DPV00.00.00.01");
+            PWL_LOG_ERR("Error parsing oem version, set to default");
+        }
+        PWL_LOG_DEBUG("Device_Package: %s", g_device_package_ver);
+    } else {
+        PWL_LOG_INFO("No oem image");
+    }
+}
+
+gint setup_download_parameter(fdtl_data_t  *fdtl_data, gboolean efs_recovery_mode) {
+    g_device_count = 1;
+    strcpy(g_diag_modem_port[0], "/dev/cdc-wdm*");
+    char *temp_pref_carrier = NULL;
+
+    // Compose image list
+    g_image_file_count = 0;
+
+    if (efs_recovery_mode == FALSE) {
+        if (g_only_flash_oem_image == FALSE) {
+            // fw
+            arrange_fw_image();
+
+            // carrie pri
+            arrange_carrier_pri_image();
+        }
+        // g_image_file_count++;
+        // oem pri
+        arrange_oem_pri_image();
+    } else {
+        prepare_recovery_image();
     }
 
     if (DEBUG) {
@@ -2738,56 +2879,15 @@ gint setup_download_parameter(fdtl_data_t  *fdtl_data)
     }
 
     // Convert oem version to device package version
-    if (g_has_update_include_oem_img) {
-        memset(g_device_package_ver, 0, DEVICE_PACKAGE_VERSION_LENGTH);
-        if (strlen(g_image_file_oem_list[0]) > 0) {
-            char oem_version[30];
-            char *temp_oem_pri_ver;
-
-            memset(oem_version, 0, sizeof(oem_version));
-            get_oem_version_from_file(g_image_file_list[g_image_file_count - 1], oem_version);
-
-            if (DEBUG) {
-                PWL_LOG_DEBUG("Convert oem version to device package version");
-                PWL_LOG_DEBUG("oem_version: %s", oem_version);
-            }
-
-            if (strlen(oem_version) > 0) {
-                temp_oem_pri_ver = (char *)malloc(strlen(oem_version));
-                memset(temp_oem_pri_ver, 0, strlen(oem_version));
-                strcat(g_device_package_ver, "DPV00.");
-                char ch;
-                for (int i = 0; i < strlen(oem_version); i++) {
-                    if (oem_version[i] == '.' || oem_version[i] == '_') {
-                        continue;
-                    } else {
-                        ch = oem_version[i];
-                        // printf("%c", ch);
-                        strncat(temp_oem_pri_ver, &ch, 1);
-                    }
-                }
-                int shift_index = 0;
-                for (int i = 0; i < 3; i++) {
-                    for (int j = 0; j < 2; j++) {
-                        ch = temp_oem_pri_ver[shift_index + j];
-                        // printf("%c", ch);
-                        strncat(g_device_package_ver, &ch, 1);
-                        if (j == 1 && i < 2) {
-                            ch = '.';
-                            strncat(g_device_package_ver, &ch, 1);
-                        }
-                    }
-                    shift_index += 2;
-                }
-                free(temp_oem_pri_ver);
-            } else {
-                strcpy(g_device_package_ver, "DPV00.00.00.01");
-                PWL_LOG_ERR("Error parsing oem version, set to default");
-            }
-            PWL_LOG_DEBUG("Device_Package: %s", g_device_package_ver);
-        } else {
-            PWL_LOG_INFO("No oem image");
+    if (efs_recovery_mode == FALSE) {
+        if (g_has_update_include_oem_img) {
+            convert_oem_ver_to_dpv();
         }
+    } else {
+        // Set DPV to DPV00.99.99.01
+        memset(g_device_package_ver, 0, DEVICE_PACKAGE_VERSION_LENGTH);
+        strcpy(g_device_package_ver, "DPV00.99.99.01");
+        if (DEBUG) PWL_LOG_DEBUG("recovery QCN image: %s", g_image_file_list[0]);
     }
 
     int rtn = -1;
@@ -2893,7 +2993,12 @@ gint prepare_update_images() {
         }
         if (DEBUG) {
             for (int m=0; m<MAX_DOWNLOAD_FW_IMAGES; m++) {
-                PWL_LOG_DEBUG("fw img: %s", g_image_file_fw_list[m]);
+
+                // Check the fw is IOT or not
+                if (is_iot_ssid() != is_iot_image(g_image_file_fw_list[m])) {
+                    PWL_LOG_DEBUG("SSID & FW not match, abort fw update.");
+                    return -1;
+                }
             }
         }
     }
@@ -3041,8 +3146,58 @@ void dismiss_module_config_prompt() {
     }
 }
 
-int start_update_process(gboolean is_startup)
-{
+gint check_if_need_update() {
+    gboolean up_to_date = FALSE;
+    if (g_has_update_include_fw_img) {
+        if ((COMPARE_FW_IMAGE_VERSION == 1 && compare_main_fw_version() == 0) ||
+            (COMPARE_FW_IMAGE_VERSION == 2 && compare_main_fw_version() <= 0)) {
+            up_to_date = TRUE;
+        }
+    } else {
+        PWL_LOG_INFO("Update images don't include any FW image. Continue to compare oem pri version");
+
+        for (int m = 0; m < MAX_DOWNLOAD_OEM_IMAGES; m++) {
+            if (strstr(g_image_file_oem_list[m], g_oem_pri_ver)) {
+                PWL_LOG_INFO("oem match %s", g_image_file_oem_list[m]);
+                up_to_date = TRUE;
+                break;
+            }
+        }
+    }
+
+    // Check mdm oem recevery
+    g_oem_pri_reset_state = -1;
+    if (check_oempri_reset_state() == RET_OK) {
+        PWL_LOG_INFO("Oempri reset check pass");
+    } else {
+        PWL_LOG_ERR("Oempri reset check failed, need flash image.");
+        up_to_date = FALSE;
+    }
+
+    // Check if module sku match ssid
+    g_only_flash_oem_image = FALSE;
+    if (up_to_date) {
+        if (get_module_sku_id() == RET_OK) {
+            // g_skuid: device ssid
+            // get_oem_sku_id(g_skuid): convert oem sku id from device ssid
+            // g_module_sku_id: module skuid, get from at cmd
+            // Compare module sku id
+
+            if (strcmp(g_module_sku_id, get_oem_sku_id(g_skuid)) != 0) {
+                PWL_LOG_ERR("Module sku check failed, need flash image.");
+                g_only_flash_oem_image = TRUE;
+                up_to_date = FALSE;
+            } else {
+                PWL_LOG_INFO("Module sku check pass");
+                g_only_flash_oem_image = FALSE;
+                up_to_date = TRUE;
+            }
+        }
+    }
+    return up_to_date;
+}
+
+int start_update_process(gboolean is_startup, gboolean efs_recovery_mode) {
     PWL_LOG_DEBUG("start_update_process");
 
     // Init dialog env
@@ -3123,165 +3278,124 @@ int start_update_process(gboolean is_startup)
     int need_get_preferred_carrier = 0;
     int ret = 0;
 
-    // Enable JP FCC config
-    set_fw_update_status_value(JP_FCC_CONFIG_COUNT, 1);
-    send_message_queue(PWL_CID_SETUP_JP_FCC_CONFIG);
-    if (!cond_wait(&g_mutex, &g_cond, 60)) {
-        PWL_LOG_ERR("timed out or error for jpp config, continue...");
-    }
-
-    // Get current fw version
-    if (get_current_fw_version() != 0)
-    {
-        PWL_LOG_ERR("Get current FW version error!");
-        close_progress_msg_box(CLOSE_TYPE_ERROR);
-        return -1;
-    }
-
-    // Get OEM PRI version
-    if (!get_oem_pri_version()) {
-        PWL_LOG_ERR("Get oem pri version error!");
-        close_progress_msg_box(CLOSE_TYPE_ERROR);
-        return -1;
-    }
-
-    // Prepare update images to a list
-    g_has_update_include_fw_img = FALSE;
-    if (!is_startup) update_progress_dialog(2, "Prepare update images...", NULL);
-    if (prepare_update_images() != 0)
-    {
-        PWL_LOG_ERR("Get update images error!");
-        close_progress_msg_box(CLOSE_TYPE_ERROR);
-        return -1;
-    }
-
-    // === Get Sim or preferred carrier first ===
-    if (!is_startup) update_progress_dialog(2, "Get carrier...", NULL);
-    if (get_sim_carrier() != 0)
-    {
-        PWL_LOG_ERR("Get Sim carrier fail, get preferred carrier.");
-        need_get_preferred_carrier = 1;
-    }
-    else
-    {
-        if (strcasecmp(g_pref_carrier, PWL_UNKNOWN_SIM_CARRIER) == 0)
-        {
-            PWL_LOG_DEBUG("Sim carrier is unknow, get preferred carrier.");
-            need_get_preferred_carrier = 1;
-        }
-    }
-
-    if (need_get_preferred_carrier)
-    {
-        if (get_preferred_carrier() != 0)
-        {
-            PWL_LOG_ERR("Get preferred carrier error!");
+    if (efs_recovery_mode == FALSE) {
+        // Check if SSID and current module fw version belong to the same category
+        gboolean iot_fw = is_iot_module_fw();
+        gboolean iot_ssid = is_iot_ssid();
+        PWL_LOG_DEBUG("Is IOT FW: %d, Is IOT SSID: %d", iot_fw, iot_ssid);
+        if (iot_fw != iot_ssid) {
+            PWL_LOG_ERR("SSID & FW not match, abort FW update");
             close_progress_msg_box(CLOSE_TYPE_ERROR);
             return -1;
         }
-    }
-    PWL_LOG_DEBUG("Final switch carrier: %s", g_pref_carrier);
 
-    // === Get SKU id (SSID) ===
-    if (!is_startup) update_progress_dialog(2, "Get SKU id", NULL);
-    if (get_sku_id() != 0)
-    {
-        PWL_LOG_ERR("Get SKU ID error!");
-        close_progress_msg_box(CLOSE_TYPE_ERROR);
-        return -1;
-    }
-    else
-        PWL_LOG_DEBUG("SKU ID: %s", g_skuid);
-
-    // === Compare main fw version ===
-    if (!is_startup) update_progress_dialog(2, "Compare fw image version", NULL);
-    if ((detect_gpu_status() != -1) && is_startup) g_progress_fp = popen(g_progress_command,"w");
-
-    gboolean up_to_date = FALSE;
-    if (g_has_update_include_fw_img) {
-        if ((COMPARE_FW_IMAGE_VERSION == 1 && compare_main_fw_version() == 0) ||
-            (COMPARE_FW_IMAGE_VERSION == 2 && compare_main_fw_version() <= 0)) {
-            up_to_date = TRUE;
+        // Enable JP FCC config
+        set_fw_update_status_value(JP_FCC_CONFIG_COUNT, 1);
+        send_message_queue(PWL_CID_SETUP_JP_FCC_CONFIG);
+        if (!cond_wait(&g_mutex, &g_cond, 600)) {
+            PWL_LOG_ERR("timed out or error for jpp config, continue...");
         }
-    } else {
-        PWL_LOG_INFO("Update images don't include any FW image. Continue to compare oem pri version");
 
-        for (int m = 0; m < MAX_DOWNLOAD_OEM_IMAGES; m++) {
-            if (strstr(g_image_file_oem_list[m], g_oem_pri_ver)) {
-                PWL_LOG_INFO("oem match %s", g_image_file_oem_list[m]);
-                up_to_date = TRUE;
-                break;
-            }
+        // Get current fw version
+        if (get_current_fw_version() != 0) {
+            PWL_LOG_ERR("Get current FW version error!");
+            close_progress_msg_box(CLOSE_TYPE_ERROR);
+            return -1;
         }
-    }
 
-    // Check mdm oem recevery
-    g_oem_pri_reset_state = -1;
-    if (check_oempri_reset_state() == RET_OK) {
-        PWL_LOG_INFO("Oempri reset check pass");
-    } else {
-        PWL_LOG_ERR("Oempri reset check failed, need flash image.");
-        up_to_date = FALSE;
-    }
-
-    // Check if module sku match ssid
-    g_only_flash_oem_image = FALSE;
-    if (up_to_date) {
-        if (get_module_sku_id() == RET_OK) {
-            // g_skuid: device ssid
-            // get_oem_sku_id(g_skuid): convert oem sku id from device ssid
-            // g_module_sku_id: module skuid, get from at cmd
-            // Compare module sku id
-
-            if (strcmp(g_module_sku_id, get_oem_sku_id(g_skuid)) != 0) {
-                PWL_LOG_ERR("Module sku check failed, need flash image.");
-                g_only_flash_oem_image = TRUE;
-                up_to_date = FALSE;
-            } else {
-                PWL_LOG_INFO("Module sku check pass");
-                g_only_flash_oem_image = FALSE;
-                up_to_date = TRUE;
-            }
+        // Get OEM PRI version
+        if (!get_oem_pri_version()) {
+            PWL_LOG_ERR("Get oem pri version error!");
+            close_progress_msg_box(CLOSE_TYPE_ERROR);
+            return -1;
         }
-    }
 
-    if (up_to_date) {
-        PWL_LOG_INFO("Current fw image already up to date, abort! ");
-        if (!is_startup) {
-            update_progress_dialog(80, "up to date", "#Modem firmware is up to date\\n\\n\n");
-            g_usleep(1000*1000*3);
-            update_progress_dialog(100, "Finish update.", "#Modem firmware is up to date\\n\\n\n");
+        // Prepare update images to a list
+        g_has_update_include_fw_img = FALSE;
+        if (!is_startup) update_progress_dialog(2, "Prepare update images...", NULL);
+        if (prepare_update_images() != 0) {
+            PWL_LOG_ERR("Get update images error!");
+            close_progress_msg_box(CLOSE_TYPE_ERROR);
+            return -1;
         }
-        if (g_progress_fp != NULL) {
-            pclose(g_progress_fp);
-            g_progress_fp = NULL;
-        }
-        return -1;
-    } else {
-        // Check eSIM profile Testprofile_Deletion_Done here
-        if (g_testprofile_delete_done == 0) {
-            PWL_LOG_DEBUG("Check eSIM test profile remove result, because Testprofile_Deletion_Done==0");
-            if ((detect_gpu_status() != -1) && !is_startup) show_module_config_prompt();
-            check_esim_test_profile_process();
-            dismiss_module_config_prompt();
-        } else if (g_testprofile_delete_done == 1) {
-            PWL_LOG_DEBUG("eSIM test profile already removed.");
+
+        // === Get Sim or preferred carrier first ===
+        if (!is_startup) update_progress_dialog(2, "Get carrier...", NULL);
+        if (get_sim_carrier() != 0) {
+            PWL_LOG_ERR("Get Sim carrier fail, get preferred carrier.");
+            need_get_preferred_carrier = 1;
         } else {
-            PWL_LOG_DEBUG("eSIM test profile remove failed, waiting for next retry opportunity");
+            if (strcasecmp(g_pref_carrier, PWL_UNKNOWN_SIM_CARRIER) == 0) {
+                PWL_LOG_DEBUG("Sim carrier is unknow, get preferred carrier.");
+                need_get_preferred_carrier = 1;
+            }
+        }
+
+        if (need_get_preferred_carrier) {
+            if (get_preferred_carrier() != 0) {
+                PWL_LOG_ERR("Get preferred carrier error!");
+                close_progress_msg_box(CLOSE_TYPE_ERROR);
+                return -1;
+            }
+        }
+        PWL_LOG_DEBUG("Final switch carrier: %s", g_pref_carrier);
+
+        // === Get SKU id (SSID) ===
+        if (!is_startup) update_progress_dialog(2, "Get SKU id", NULL);
+        if (get_sku_id() != 0) {
+            PWL_LOG_ERR("Get SKU ID error!");
+            close_progress_msg_box(CLOSE_TYPE_ERROR);
+            return -1;
+        } else
+            PWL_LOG_DEBUG("SKU ID: %s", g_skuid);
+
+        // === Compare main fw version ===
+        if (!is_startup) update_progress_dialog(2, "Compare fw image version", NULL);
+        if ((detect_gpu_status() != -1) && is_startup) g_progress_fp = popen(g_progress_command, "w");
+        gboolean up_to_date = FALSE;
+        up_to_date = check_if_need_update();
+
+        if (up_to_date) {
+            PWL_LOG_INFO("Current fw image already up to date, abort! ");
+            if (!is_startup) {
+                update_progress_dialog(80, "up to date", "#Modem firmware is up to date\\n\\n\n");
+                g_usleep(1000 * 1000 * 3);
+                update_progress_dialog(100, "Finish update.", "#Modem firmware is up to date\\n\\n\n");
+            }
+            if (g_progress_fp != NULL) {
+                pclose(g_progress_fp);
+                g_progress_fp = NULL;
+            }
+            return -1;
+        } else {
+            // Check eSIM profile Testprofile_Deletion_Done here
+            if (g_testprofile_delete_done == 0) {
+                PWL_LOG_DEBUG("Check eSIM test profile remove result, because Testprofile_Deletion_Done==0");
+                if ((detect_gpu_status() != -1) && !is_startup) show_module_config_prompt();
+                check_esim_test_profile_process();
+                dismiss_module_config_prompt();
+            } else if (g_testprofile_delete_done == 1) {
+                PWL_LOG_DEBUG("eSIM test profile already removed.");
+            } else {
+                PWL_LOG_DEBUG("eSIM test profile remove failed, waiting for next retry opportunity");
+            }
         }
     }
 
     // === Setup download parameter ===
     fdtl_data_t  fdtl_data[1];
-    if (setup_download_parameter(&fdtl_data[0]) != 0)
-    {
+    if (setup_download_parameter(&fdtl_data[0], efs_recovery_mode) != 0) {
         PWL_LOG_ERR("setup_download_parameter error");
         g_fw_update_retry_count++;
         set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
         ret = DOWNLOAD_PARAMETER_PARSING_FAILED;
     } else {
         // === Start Download process ===
-        ret = download_process(&fdtl_data[0]);
+        ret = download_process(&fdtl_data[0], efs_recovery_mode);
+    }
+
+    if (efs_recovery_mode) {
+        restart_madpt_and_fwupdate_service();
     }
 
     // TODO: GPIO RESET
@@ -5131,10 +5245,129 @@ int parse_checksum(char *checksum_file, char *key_image, char *checksum_value) {
     return ret;
 }
 
+gint post_message_queue_action(int action) {
+    int err, ret, retry, cid = 0;
+    char retry_msg[128] = {0};
+    while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
+        err = 0;
+        switch (action) {
+            // Get ATI info
+            case MESSAGE_QUEUE_ACTION_GET_ATI_INFO:
+                cid = PWL_CID_GET_ATI;
+                send_message_queue(PWL_CID_GET_ATI);
+                snprintf(retry_msg, sizeof(retry_msg), "Get ATI info error, retry!");
+                break;
+            // Backup current SN and IMEI
+            case MESSAGE_QUEUE_ACTION_BACKUP_SN_IMEI:
+                cid = PWL_CID_BACKUP_SN_IMEI;
+                char backup_str[SN_MAX_LENGTH + IMEI_MAX_LENGTH] = {0};
+                snprintf(backup_str, sizeof(backup_str), "%s;%s", g_sn, g_imei);
+                snprintf(retry_msg, sizeof(retry_msg), "Backup SN/IMEI error, retry!");
+                send_message_queue_with_content(PWL_CID_BACKUP_SN_IMEI, backup_str);
+                break;
+            // Get backup SN/IMEI
+            case MESSAGE_QUEUE_ACTION_GET_BACKUP_SN_IMEI:
+                cid = PWL_CID_GET_BACKUP_SN_IMEI;
+                send_message_queue(PWL_CID_GET_BACKUP_SN_IMEI);
+                snprintf(retry_msg, sizeof(retry_msg), "Get Backup SN/IMEI error, retry!");
+                break;
+            // Restore backup SN
+            case MESSAGE_QUEUE_ACTION_RESTORE_SN:
+                cid = PWL_CID_RESTORE_SN;
+                send_message_queue_with_content(PWL_CID_RESTORE_SN, g_sn);
+                snprintf(retry_msg, sizeof(retry_msg), "Restore SN error, retry!");
+                break;
+            // Restore backup IMEI
+            case MESSAGE_QUEUE_ACTION_RESTORE_IMEI:
+                cid = PWL_CID_RESTORE_IMEI;
+                send_message_queue_with_content(PWL_CID_RESTORE_IMEI, g_imei);
+                snprintf(retry_msg, sizeof(retry_msg), "Restore IMEI error, retry!");
+                break;
+            default:
+                break;
+        }
+
+        pthread_mutex_lock(&g_mutex);
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += PWL_CMD_TIMEOUT_SEC;
+        ret = pthread_cond_timedwait(&g_cond, &g_mutex, &timeout);
+
+        if (DEBUG) PWL_LOG_DEBUG("CID: %s, Status: %d", cid_name[g_pwl_cid_map[cid].pwl_cid], g_pwl_cid_map[cid].status);
+
+        if (ret == ETIMEDOUT || ret != 0 || g_pwl_cid_map[cid].status == PWL_CID_STATUS_ERROR) {
+            PWL_LOG_ERR("%s", retry_msg);
+            err = 1;
+        }
+        pthread_mutex_unlock(&g_mutex);
+        if (err) {
+            retry++;
+            continue;
+        }
+        return RET_OK;
+    }
+    return RET_FAILED;
+}
+
+gint prepare_recovery_image() {
+    PWL_LOG_DEBUG("Prepare recovery image");
+    g_has_update_include_oem_img = FALSE;
+    memset(g_image_file_list, 0, sizeof(g_image_file_list));
+    DIR *d;
+    struct dirent *dir;
+    char *image_full_file_name;
+    int image_full_name_len;
+    d = opendir(IMAGE_OEM_FOLDER_PATH);
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strncmp(dir->d_name, "4131999", 7) == 0) {
+                const char *ext = strrchr(dir->d_name, '.');
+                if (ext && strcmp(ext, ".cfw") == 0) {
+                    image_full_name_len = strlen(IMAGE_OEM_FOLDER_PATH) + strlen(dir->d_name) + 1;
+                    image_full_file_name = (char *) malloc(image_full_name_len);
+                    memset(image_full_file_name, '\0', image_full_name_len);
+                    strcat(image_full_file_name, IMAGE_OEM_FOLDER_PATH);
+                    strcat(image_full_file_name, dir->d_name);
+                    strcpy(g_image_file_list[0], image_full_file_name);
+                    free(image_full_file_name);
+                    image_full_file_name = NULL;
+                    g_image_file_count = 1;
+                    g_has_update_include_oem_img = TRUE;
+                    break;
+                }
+            }
+        }
+        closedir(d);
+    }
+    // Find fw image to decode frp
+    d = opendir(IMAGE_FW_FOLDER_PATH);
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strstr(dir->d_name, ".dfw") || strstr(dir->d_name, ".cfw")) {
+                image_full_name_len = strlen(IMAGE_FW_FOLDER_PATH) + strlen(dir->d_name) + 1;
+                image_full_file_name = (char *) malloc(image_full_name_len);
+                memset(image_full_file_name, '\0', image_full_name_len);
+                strcat(image_full_file_name, IMAGE_FW_FOLDER_PATH);
+                strcat(image_full_file_name, dir->d_name);
+                strcpy(g_image_file_fw_list[0], image_full_file_name);
+                free(image_full_file_name);
+                image_full_file_name = NULL;
+            }
+        }
+        closedir(d);
+    }
+}
+
 gint main( int Argc, char **Argv )
 {
     PWL_LOG_INFO("start");
+    gboolean efs_recovery_mode = FALSE;
 
+    // init cid table
+    for (int i = 0; i< PWL_CID_MAX; i++) {
+        g_pwl_cid_map[i].pwl_cid = i;
+        g_pwl_cid_map[i].status = PWL_CID_STATUS_NONE;
+    }
     g_device_type = pwl_get_device_type_await();
     if (g_device_type == PWL_DEVICE_TYPE_UNKNOWN) {
         PWL_LOG_INFO("Unsupported device.");
@@ -5186,6 +5419,29 @@ gint main( int Argc, char **Argv )
         goto PREPARE_ERROR;
     }
 
+    // Get SN and IMEI to check if has been EFS corrupt
+    if (post_message_queue_action(MESSAGE_QUEUE_ACTION_GET_ATI_INFO) == RET_OK) {
+        get_sn_and_imei();
+        if (strlen(g_sn) == 0 || strlen(g_imei) == 0) {
+            post_message_queue_action(MESSAGE_QUEUE_ACTION_GET_BACKUP_SN_IMEI);
+
+            // Check for backup SN/IMEI
+            if (strlen(g_sn) == 0 || strlen(g_imei) == 0) {
+                PWL_LOG_ERR("Missing backup SN or IMEI, abort!");
+                efs_recovery_mode = FALSE;
+            } else {
+                efs_recovery_mode = TRUE;
+            }
+        } else {
+            efs_recovery_mode = FALSE;
+            if (post_message_queue_action(MESSAGE_QUEUE_ACTION_BACKUP_SN_IMEI) != RET_OK)
+                PWL_LOG_ERR("Backup SN/IMEI error!");
+        }
+    } else {
+        PWL_LOG_DEBUG("Can't get ati info, abort EFS corrupt check.");
+        efs_recovery_mode = FALSE;
+    }
+
     //=========
     // TODO: 1. stop modem mgr, 2. check fcc unlock process 3. Remove g_authenticate_key_file_name file
     // Stop modem manager
@@ -5210,7 +5466,7 @@ gint main( int Argc, char **Argv )
         } else {
             if (extract_update_files() == 0) {
                 PWL_LOG_DEBUG("Start update process");
-                if (start_update_process(TRUE) != 0) {
+                if (start_update_process(TRUE, efs_recovery_mode) != 0) {
                     goto PREPARE_ERROR;
                 }
             } else {
