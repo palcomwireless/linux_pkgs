@@ -36,10 +36,13 @@
 #define PWL_MAX_SKUID_SIZE              15
 
 #define STATUS_LINE_LENGTH              128
+#define SN_MAX_LENGTH                   32
+#define IMEI_MAX_LENGTH                 32
 #define FW_UPDATE_STATUS_RECORD         "/opt/pwl/firmware/fw_update_status"
 // #define HAS_BEEN_FW_UPDATE_FLAG         "/opt/pwl/has_been_fw_update"
 #define BOOTUP_STATUS_RECORD            "/opt/pwl/bootup_status"
 #define ESIM_PROFILE_REMOVE_RECORD      "/opt/pwl/esim_profile_remove_status"
+#define SN_IMEI_INFO_RECORD             "/opt/pwl/sn_imei_info"
 #define FIND_FASTBOOT_RETRY_COUNT       "Find_fastboot_retry_count"
 #define WAIT_MODEM_PORT_RETRY_COUNT     "Wait_modem_port_retry_count"
 #define WAIT_AT_PORT_RETRY_COUNT        "Wait_at_port_retry_count"
@@ -145,6 +148,8 @@ typedef enum {
     PWL_CID_GET_DPV_VER,
     PWL_CID_GET_PREF_CARRIER_ID,
     PWL_CID_GET_CXP_REBOOT_FLAG,
+    PWL_CID_BACKUP_SN_IMEI,
+    PWL_CID_GET_BACKUP_SN_IMEI,
     PLW_CID_MAX_PREF,
     /* request to madpt */
     PWL_CID_GET_CIMI,
@@ -175,6 +180,8 @@ typedef enum {
     PWL_CID_GET_ESIM_STATE,
     PWL_CID_CHECK_ESIM_TEST_PROF,
     PWL_CID_DELETE_ESIM_TEST_PROF,
+    PWL_CID_RESTORE_SN,
+    PWL_CID_RESTORE_IMEI,
     PWL_CID_MADPT_RESTART,
     PWL_CID_SETUP_JP_FCC_CONFIG,
     PLW_CID_MAX_MADPT,
@@ -196,6 +203,8 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_DPV_VER] = "GET_DPV_VER",
     [PWL_CID_GET_PREF_CARRIER_ID] = "GET_PREF_CARRIER_ID",
     [PWL_CID_GET_CXP_REBOOT_FLAG] = "GET_CXP_REBOOT_FLAG",
+    [PWL_CID_BACKUP_SN_IMEI] = "BACKUP_SN_IMEI",
+    [PWL_CID_GET_BACKUP_SN_IMEI] = "GET_BACKUP_SN_IMEI",
     [PWL_CID_GET_CIMI] = "GET_CIMI",
     [PWL_CID_GET_ATE] = "GET_ATE",
     [PWL_CID_GET_ATI] = "GET_ATI",
@@ -223,6 +232,8 @@ static const gchar * const cid_name[] = {
     [PWL_CID_GET_ESIM_STATE] = "GET_ESIM_STATE",
     [PWL_CID_CHECK_ESIM_TEST_PROF] = "CHK_ESIM_TEST_PROF",
     [PWL_CID_DELETE_ESIM_TEST_PROF] = "DEL_ESIM_TEST_PROF",
+    [PWL_CID_RESTORE_SN] = "RESTORE_SN",
+    [PWL_CID_RESTORE_IMEI] = "RESTORE_IMEI",
     [PWL_CID_MADPT_RESTART] = "MADPT_RESTART",
     [PWL_CID_SETUP_JP_FCC_CONFIG] = "SETUP_JP_FCC_CONFIG",
 };
@@ -234,6 +245,11 @@ typedef enum {
     PWL_CID_STATUS_TIMEOUT,
     PWL_CID_STATUS_BUSY
 } pwl_cid_status_t;
+
+typedef struct {
+    uint32_t pwl_cid;
+    pwl_cid_status_t status;
+} pwl_cid_record_t;
 
 static const gchar * const cid_status_name[] = {
     [PWL_CID_STATUS_OK] = "OK",
@@ -303,6 +319,10 @@ void print_message_info(msg_buffer_t* message);
 gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size);
 gboolean pwl_set_command(const gchar *command, gchar **response);
 gboolean pwl_set_command_available();
+gboolean is_iot_module_fw();
+gboolean is_iot_ssid();
+gboolean is_iot_image(const char *image);
+int get_fw_main_version(const char *input);
 int fw_update_status_init();
 int set_fw_update_status_value(char *key, int value);
 int get_fw_update_status_value(char *key, int *result);
@@ -316,5 +336,7 @@ int count_int_length(unsigned x);
 int read_config_from_file(char *file_name, char*key, int *value);
 int get_fwupdate_subsysid(char *subsysid);
 int remove_folder(char *path);
+int split_backup_sn_imei(const char *input, char *sn, char *imei);
 void trim_string(char *string);
+void update_cid_record(pwl_cid_record_t *cid_table, pwl_cid_t cid, pwl_cid_status_t status);
 #endif
