@@ -62,7 +62,9 @@ gchar* at_cmd_map[] = {
     "at*mresetoempri=1",
     "at+esimenable?",
     "at*bchktestprof?",
-    "at*bdeltestprof=1"
+    "at*bdeltestprof=1",
+    "at*msnrw=",
+    "at*mimei="
 };
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -377,6 +379,7 @@ static gpointer msg_queue_thread_func(gpointer data) {
     attr.mq_msgsize = sizeof(message);
     attr.mq_curmsgs = 0;
     gboolean has_flash_oem_img = FALSE;
+    gboolean efs_recovery_mode = FALSE;
     /* create the message queue */
     mq = mq_open(PWL_MQ_PATH_MADPT, O_CREAT | O_RDONLY, 0644, &attr);
 
@@ -394,12 +397,20 @@ static gpointer msg_queue_thread_func(gpointer data) {
 
         if (message.pwl_cid == PWL_CID_MADPT_RESTART) {
             has_flash_oem_img = FALSE;
-            if (strcmp(message.content, "TRUE") == 0)
+            efs_recovery_mode = FALSE;
+            if (strcmp(message.content, "TRUE") == 0) {
                 has_flash_oem_img = TRUE;
-            else
-               has_flash_oem_img = FALSE;
+                efs_recovery_mode = FALSE;
+            } else if (strcmp(message.content, "RECOVERY") == 0) {
+                has_flash_oem_img = TRUE;
+                efs_recovery_mode = TRUE;
+            } else {
+                has_flash_oem_img = FALSE;
+                efs_recovery_mode = FALSE;
+            }
             PWL_LOG_INFO("Has flash oem pri image: %d", has_flash_oem_img);
-            jp_fcc_config(FALSE, has_flash_oem_img);
+            PWL_LOG_INFO("message.content: %s, IS EFS recovery mode: %d", message.content, efs_recovery_mode);
+            jp_fcc_config(FALSE, has_flash_oem_img, efs_recovery_mode);
             timedwait = FALSE;
         } else if (message.pwl_cid == PWL_CID_SET_PREF_CARRIER) { 
             if (DEBUG) PWL_LOG_DEBUG("PWL_CID_SET_PREF_CARRIER");
@@ -440,6 +451,20 @@ static gpointer msg_queue_thread_func(gpointer data) {
         } else if (message.pwl_cid == PWL_CID_SETUP_JP_FCC_CONFIG) {
             enable_jp_fcc_auto_reboot();
             timedwait = FALSE;
+        } else if (message.pwl_cid == PWL_CID_RESTORE_SN ||
+                   message.pwl_cid == PWL_CID_RESTORE_IMEI) {
+            cmd_len = strlen(at_cmd_map[ATCMD_INDEX_MAP(message.pwl_cid)]) + strlen(message.content) + 3;
+            cust_set_cmd = (char *) malloc(cmd_len);
+            if (!cust_set_cmd) {
+                PWL_LOG_ERR("malloc failed for cust_set_cmd");
+                return NULL;
+            }
+            memset(cust_set_cmd, '0', cmd_len);
+
+            snprintf(cust_set_cmd, cmd_len, "%s\"%s\"", at_cmd_map[ATCMD_INDEX_MAP(message.pwl_cid)], message.content);
+            if (DEBUG) PWL_LOG_DEBUG("Restore_cmd: %s", cust_set_cmd);
+            status = at_cmd_request(cust_set_cmd);
+            free(cust_set_cmd);
         } else {
             status = at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(message.pwl_cid)]);
         }
@@ -578,6 +603,12 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 if (DEBUG) PWL_LOG_DEBUG("Delete eSIM test profile");
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
+            case PWL_CID_RESTORE_SN:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_RESTORE_IMEI:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
             default:
                 PWL_LOG_ERR("Unknown pwl cid: %d", message.pwl_cid);
                 break;
@@ -594,7 +625,7 @@ static gpointer jp_fcc_thread_func(gpointer data) {
     if (jp_fcc_config_retry > 0 && jp_fcc_config_retry < JP_FCC_CONFIG_RETRY_TH) {
         jp_fcc_config_retry++;
         set_fw_update_status_value(JP_FCC_CONFIG_COUNT, jp_fcc_config_retry);
-        jp_fcc_config(TRUE, FALSE);
+        jp_fcc_config(TRUE, FALSE, FALSE);
     } else {
         PWL_LOG_INFO("wait for modem to get ready");
         sleep(PWL_MBIM_READY_SEC);
@@ -680,14 +711,14 @@ void wait_for_modem_oem_pri_reset() {
     }
 }
 
-void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem) {
+void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem, gboolean efs_recovery_mode) {
     gboolean is_mbim_ready = FALSE;
     // just after flash, wait a bit for modem to get ready
     PWL_LOG_INFO("wait for modem to get ready");
     sleep(PWL_MBIM_READY_SEC);
 
-    // Check mbim init (timout 3 mins 6s*30)
-    for (int i = 0; i < 30; i++) {
+    // Check mbim init (timout 5 mins 6s*50)
+    for (int i = 0; i < 50; i++) {
         if (!mbim_init(FALSE)) {
             sleep(6);
             continue;
@@ -721,10 +752,14 @@ void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem) {
     // REST(2) > reset module
     if (has_flash_oem) {
         gint retry = 0;
+        if (efs_recovery_mode) {
+            PWL_LOG_DEBUG("Sleep 2 mins for efs recovery");
+            sleep(60 * 2);
+        }
         while (g_oem_pri_state != OEM_PRI_UPDATE_NORESET) {
             if (retry > 10) break;  // retry wait for OEM_PRI_UPDATE_RESET for 50s then exit
 
-            PWL_LOG_DEBUG("===== Get OEM pri info =====, def: %d", g_oem_pri_state);
+            PWL_LOG_DEBUG("===== Get OEM pri info =====, def: %d, retry: %d", g_oem_pri_state, retry);
             madpt_at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(PWL_CID_GET_OEM_PRI_INFO)]);
             sleep(5);
             retry++;
@@ -740,6 +775,7 @@ void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem) {
                 continue;
             }
         }
+        PWL_LOG_DEBUG("retry times: %d", retry);
         PWL_LOG_DEBUG("===== OEM info check END =====");
 
         for (int i = 0; i < 5; i++) {

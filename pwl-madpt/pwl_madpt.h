@@ -43,7 +43,7 @@ typedef struct {
 } signal_callback_t;
 
 gboolean at_resp_parsing(const gchar *rsp, gchar *buff_ptr, guint32 buff_size);
-void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem);
+void jp_fcc_config(gboolean enable_jp_fcc, gboolean has_flash_oem, gboolean efs_recovery_mode);
 void restart();
 void mbim_error_check();
 void enable_jp_fcc_auto_reboot();
