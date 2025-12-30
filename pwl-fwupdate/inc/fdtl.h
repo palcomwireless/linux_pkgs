@@ -22,6 +22,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <poll.h>
+#include "common.h"
 
 #define MAX_PATH  260
 #define MODEL_NAME_LEN  10
@@ -35,7 +36,7 @@
 #define FASTBOOT_FLASH_PREF      7
 #define MAX_OPTION_NUMBER  9
 
-#define MAX_DOWNLOAD_FW_IMAGES    3
+#define MAX_DOWNLOAD_FW_IMAGES    1
 #define MAX_DOWNLOAD_PRI_IMAGES   100
 #define MAX_DOWNLOAD_OEM_IMAGES   100
 #define MAX_DOWNLOAD_FILES        (MAX_DOWNLOAD_FW_IMAGES + MAX_DOWNLOAD_PRI_IMAGES + MAX_DOWNLOAD_OEM_IMAGES)
@@ -111,7 +112,6 @@ typedef struct FDTL_DATA
 
     int update_oem_pri;
     int error_code;
-
 } fdtl_data_t;
 
 int process_at_command( fdtl_data_t *fdtl_data, int case_id, void *parameter_1, void *parameter_2 );
@@ -124,7 +124,7 @@ void printf_fdtl_s( char *msg );
 
 int fastboot_main( int exe_case, char *argv1, char *argv2, char *argv3, int device_idx );
 int check_fastboot_download_port( char *argv );
-int download_process( void *argu_ptr );
+int download_process( void *argu_ptr, gboolean efs_recovery_mode );
 
 //#define printf_fdtl_s(stringbuffer) (output_message_to_file( stringbuffer))
 //#define printf_fdtl_s(stringbuffer) (printf(stringbuffer))
