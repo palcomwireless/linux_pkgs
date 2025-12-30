@@ -28,6 +28,11 @@
 #define MAX_PCIE_VERSION_LENGTH         512
 #define MAX_PCIE_AP_VERSION_LENGTH      10
 
+#define SN_PREFIX   "SN: "
+#define IMEI_PREFIX "IMEI: "
+#define BACKUP_FILE_SAVE            0
+#define BACKUP_FILE_LOAD            1
+
 typedef void (*signal_get_fw_version_callback)(const gchar*);
 typedef void (*signal_get_sub_state_change_callback)(gint arg_status);
 

@@ -46,6 +46,8 @@ static char *g_op_version;
 static char *g_oem_version;
 static char *g_dpv_version;
 
+// SN and IMEI
+static char g_sn_imei[SN_MAX_LENGTH + IMEI_MAX_LENGTH];
 //SIM info
 static int g_mnc_len;
 static char g_sim_carrier[15];
@@ -714,6 +716,96 @@ void get_carrier_from_sim(char *mcc, char *mnc)
         strcpy(g_sim_carrier, PWL_UNKNOWN_SIM_CARRIER);
 }
 
+static int handle_sn_imei_backup_file(int action, const char *input) {
+    FILE *fp = NULL;
+
+    switch (action) {
+        // Backup SN and IMEI
+        case BACKUP_FILE_SAVE:
+            // input format: "SN;IMEI"
+            fp = fopen(SN_IMEI_INFO_RECORD, "w");
+            if (!fp) {
+                PWL_LOG_ERR("Failed to open sn-imei record file!");
+                return RET_FAILED;
+            }
+            if (fprintf(fp, "%s\n", input) < 0) {
+                PWL_LOG_ERR("Failed to write sn-imei record file!");
+                fclose(fp);
+                return RET_FAILED;
+            }
+
+            fclose(fp);
+            break;
+        // Load SN and IMEI from backup file
+        case BACKUP_FILE_LOAD:
+            char line[128] = {0};
+            fp = fopen(SN_IMEI_INFO_RECORD, "r");
+            if (!fp) {
+                PWL_LOG_ERR("Failed to open sn-imei record file!");
+                return RET_FAILED;
+            }
+            if (fgets(line, sizeof(line), fp)) {
+                trim_string(line);
+                strncpy(g_sn_imei, line, sizeof(g_sn_imei) - 1);
+                g_sn_imei[sizeof(g_sn_imei) - 1] = '\0';
+            } else {
+                PWL_LOG_ERR("Failed to read sn-imei record file!");
+                fclose(fp);
+                return RET_FAILED;
+            }
+
+            fclose(fp);
+            break;
+        default:
+            PWL_LOG_ERR("Unknown action for sn-imei backup file!");
+            return RET_FAILED;
+    }
+
+    return RET_OK;
+}
+/*
+static int save_sn_imei_to_file() {
+    FILE *fp = fopen(SN_IMEI_INFO_RECORD, "w");
+    if (!fp) {
+        PWL_LOG_ERR("Failed to open sn-imei record file!");
+        return RET_FAILED;
+    }
+
+    if (fprintf(fp, "SN: %s\n", g_sn) < 0 ||
+        fprintf(fp, "IMEI: %s\n", g_imei) < 0) {
+        PWL_LOG_ERR("Failed to write sn-imei record file!");
+        fclose(fp);
+        return RET_FAILED;
+    }
+
+    fclose(fp);
+    return RET_OK;
+}
+
+static int load_sn_imei_from_file() {
+    FILE *fp = fopen(SN_IMEI_INFO_RECORD, "r");
+    if (!fp) {
+        PWL_LOG_ERR("Failed to open sn-imei record file!");
+        return RET_FAILED;
+    }
+
+    char line[128] = {0};
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "SN: ", 4) == 0) {
+            strncpy(g_sn, line + 4, sizeof(g_sn) - 1);
+            g_sn[sizeof(g_sn) - 1] = '\0';
+            g_sn[strcspn(g_sn, "\n")] = '\0';
+        } else if (strncmp(line, "IMEI: ", 6) == 0) {
+            strncpy(g_imei, line + 6, sizeof(g_imei) - 1);
+            g_imei[sizeof(g_imei) - 1] = '\0';
+            g_imei[strcspn(g_imei, "\n")] = '\0';
+        }
+    }
+    fclose(fp);
+    return RET_OK;
+}
+*/
+
 static gpointer msg_queue_thread_func(gpointer data) {
     mqd_t mq;
     struct mq_attr attr;
@@ -863,6 +955,22 @@ static gpointer msg_queue_thread_func(gpointer data) {
                     send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_sim_carrier);
                 } else {
                     send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, g_sim_carrier);
+                }
+                break;
+            case PWL_CID_BACKUP_SN_IMEI:
+                int status = PWL_CID_STATUS_ERROR;
+                char *err_msg = "Backup SN/IMEI Error";
+                if (strlen(message.content) > 0 && handle_sn_imei_backup_file(BACKUP_FILE_SAVE, message.content) == RET_OK) {
+                    status = PWL_CID_STATUS_OK;
+                    err_msg = "";
+                }
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, status, err_msg);
+                break;
+            case PWL_CID_GET_BACKUP_SN_IMEI:
+                if (handle_sn_imei_backup_file(BACKUP_FILE_LOAD, NULL) != RET_OK) {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_ERROR, "Get backup sn/imei Error!");
+                } else {
+                    send_message_reply(message.pwl_cid, PWL_MQ_ID_PREF, message.sender_id, PWL_CID_STATUS_OK, g_sn_imei);
                 }
                 break;
             /* CID request from myself */
