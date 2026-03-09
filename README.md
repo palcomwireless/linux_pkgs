@@ -158,3 +158,10 @@ To install services
 
 - version: 4.6.1
     - Add more support list
+
+- version: 4.7.0
+    - Implement EFS recovery mechanism
+    - Check SSID & FW belong to the same category
+
+- version: 4.7.1
+    - Add one additional supported PCIe SSID.
