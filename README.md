@@ -165,3 +165,6 @@ To install services
 
 - version: 4.7.1
     - Add one additional supported PCIe SSID.
+
+- version: 4.7.2
+    - Add one additional supported USB SSID.
