@@ -9,7 +9,9 @@ mm_version_ge() {
 mm_options=('--test-low-power-suspend-resume' '--test-quick-suspend-resume')
 mm_base_option=('--test-quick-suspend-resume')
 device=`lspci -D -nn | grep 14c0:4d75`
-usb_device=`lsusb | grep 413c:8217`
+
+usb_mm_options=('--test-quick-suspend-resume')
+usb_device=$(lsusb | grep -E '413c:8217|413c:81ea')
 
 service_file=$(systemctl show ModemManager -p FragmentPath --value)
 if [[ -z "$service_file" ]]; then
@@ -32,10 +34,15 @@ else
     available_options=()
     options_to_use=()
 
-    if mm_version_ge "$MM_VERSION" "1.24.2"; then
-        options_to_use=("${mm_options[@]}")
-    else
-        options_to_use=("${mm_base_option[@]}")
+    if [ -n "$device" ]; then
+        if mm_version_ge "$MM_VERSION" "1.24.2"; then
+            options_to_use=("${mm_options[@]}")
+        else
+            options_to_use=("${mm_base_option[@]}")
+        fi
+    fi
+    if [ -n "$usb_device" ]; then
+        options_to_use=("${usb_mm_options[@]}")
     fi
 
     for opt in "${options_to_use[@]}"
