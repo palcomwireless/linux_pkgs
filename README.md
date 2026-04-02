@@ -169,6 +169,6 @@ To install services
 - version: 4.7.2
     - Add one additional supported USB SSID.
 
-- version: 4.7.3
+- version: 4.7.4
     - Fix fcc unlock issue.
-    - Add PID/PID 413c:81ea
+    - Add USB VID/PID 413c:81ea
