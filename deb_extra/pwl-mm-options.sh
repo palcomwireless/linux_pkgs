@@ -8,8 +8,14 @@ mm_version_ge() {
 
 mm_options=('--test-low-power-suspend-resume' '--test-quick-suspend-resume')
 mm_base_option=('--test-quick-suspend-resume')
-device=`lspci -D -nn | grep 14c0:4d75`
-usb_device=$(lsusb | grep -E '413c:8217|413c:81ea')
+for i in {1..20}; do
+    usb_device=$(lsusb | grep -E '413c:8217|413c:81ea')
+    device=$(lspci -D -nn | grep 14c0:4d75)
+    if [ -n "$usb_device" ] || [ -n "$device" ]; then
+        break
+    fi
+    sleep 1
+done
 
 service_file=$(systemctl show ModemManager -p FragmentPath --value)
 if [[ -z "$service_file" ]]; then
