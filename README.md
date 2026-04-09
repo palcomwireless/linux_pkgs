@@ -172,3 +172,6 @@ To install services
 - version: 4.7.4
     - Fix fcc unlock issue.
     - Add USB VID/PID 413c:81ea
+
+- version: 4.7.5
+    - Fix missing "test low power mode" parameter issue.
