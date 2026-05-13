@@ -2991,14 +2991,13 @@ gint prepare_update_images() {
             for (int m=0; m < MAX_DOWNLOAD_FW_IMAGES; m++)
                 strcpy(g_image_file_fw_list[m], temp_fw_image_file_list[(g_image_file_count - MAX_DOWNLOAD_FW_IMAGES) + m]);
         }
-        if (DEBUG) {
-            for (int m=0; m<MAX_DOWNLOAD_FW_IMAGES; m++) {
 
-                // Check the fw is IOT or not
-                if (is_iot_ssid() != is_iot_image(g_image_file_fw_list[m])) {
-                    PWL_LOG_DEBUG("SSID & FW not match, abort fw update.");
-                    return -1;
-                }
+        for (int m=0; m<MAX_DOWNLOAD_FW_IMAGES; m++) {
+
+            // Check the fw is IOT or not
+            if (is_iot_ssid() != is_iot_image(g_image_file_fw_list[m])) {
+                PWL_LOG_DEBUG("SSID & FW not match, abort fw update.");
+                return -1;
             }
         }
     }
