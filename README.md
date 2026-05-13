@@ -175,3 +175,7 @@ To install services
 
 - version: 4.7.5
     - Fix missing "test low power mode" parameter issue.
+
+- version: 4.7.6
+    - Add one additional supported USB SSID.
+    - Fix PCIoT and Non-PCIoT cross download issue.
