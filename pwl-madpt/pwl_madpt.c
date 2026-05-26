@@ -64,7 +64,9 @@ gchar* at_cmd_map[] = {
     "at*bchktestprof?",
     "at*bdeltestprof=1",
     "at*msnrw=",
-    "at*mimei="
+    "at*mimei=",
+    "at*cdisablehwsar=0",
+    "at*cdisablehwsar=1"
 };
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -465,6 +467,12 @@ static gpointer msg_queue_thread_func(gpointer data) {
             if (DEBUG) PWL_LOG_DEBUG("Restore_cmd: %s", cust_set_cmd);
             status = at_cmd_request(cust_set_cmd);
             free(cust_set_cmd);
+        } else if (message.pwl_cid == PWL_CID_SET_DISABLE_HWSAR_0 ||
+                   message.pwl_cid == PWL_CID_SET_DISABLE_HWSAR_1) {
+            if (DEBUG) PWL_LOG_DEBUG("Executing HWSAR Mode Change: %s", at_cmd_map[ATCMD_INDEX_MAP(message.pwl_cid)]);
+
+            status = at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(message.pwl_cid)]);
+            timedwait = TRUE; 
         } else {
             status = at_cmd_request(at_cmd_map[ATCMD_INDEX_MAP(message.pwl_cid)]);
         }
@@ -607,6 +615,10 @@ static gpointer msg_queue_thread_func(gpointer data) {
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
             case PWL_CID_RESTORE_IMEI:
+                send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
+                break;
+            case PWL_CID_SET_DISABLE_HWSAR_0:
+            case PWL_CID_SET_DISABLE_HWSAR_1:
                 send_message_reply(message.pwl_cid, PWL_MQ_ID_MADPT, message.sender_id, status, g_response);
                 break;
             default:
