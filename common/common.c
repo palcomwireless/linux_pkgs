@@ -26,8 +26,10 @@ static char *g_subsysid;
 
 gboolean g_is_iot_ssid = FALSE;
 gboolean g_is_iot_fw = FALSE;
+gboolean g_is_iot_pcie_device = FALSE;
 
 #define IOT_START_INDEX     31
+#define PCIE_IOT_START_INDEX     9
 
 char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
                         "0CB2", "0CB3", "0CB4", "0CB9", "0CBA",
@@ -49,21 +51,17 @@ char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
                         "0E5C", "0E6A", "0E5E", "0E68"
                      };
 
-char *pcie_devices[] = { "0CF4", "0CF5", "0CDD", "0CF1", "0CDB",
-                         "0D4D", "0D4E", "0D4F", "0D65", "0DBD",
+char *pcie_devices[] = { "0D4D", "0D4E", "0D4F", "0D65", "0CDD", 
+                         "0CF4", "0CF5", "0CF1", "0CDB",
                          //======
-                        "0DBD", "0E1A", "0E38", "0E1B", "0E1D",
-                        "0E1C", "0E1E", "0E33", "0E3C", "0E34",
-                        "0E3D", "0E3A", "0E3B", "0E1F", "0E20",
-                        "0E22", "0E21", "0E25", "0E23", "0E24",
-                        "0E27", "0E31", "0E32", "0E26", "0E28",
-                        "0E3E", "0E3F", "0E82", "0E83", "0E84",
-                        "0E85", "0E5F", "0E65", "0E5B", "0E69",
-                        "0E60", "0E66", "0E5C", "0E6A", "0E5D",
-                        "0E67", "0E5E", "0E68", "0E8A", "0E8C",
-                        "0E8B", "0E8D", "0D85", "0D8A", "0D4D",
-                        "0D4E", "0D4F", "0D65", "0DD0", "0D87",
-                        "0D88"
+                        "0DBD", "0E1A", "0E38", "0E1B", "0E1D", 
+                        "0E1C", "0E1E", "0E33", "0E34", "0E1F", 
+                        "0E20", "0E22", "0E21", "0E25", "0E23", 
+                        "0E24", "0E27", "0E31", "0E32", "0E26", 
+                        "0E28", "0E3E", "0E3F", "0E82", "0E83", 
+                        "0E84", "0E85", "0E5F", "0E65", "0E5B", 
+                        "0E69", "0E60", "0E66", "0E5C", "0E6A", 
+                        "0EA3", "0EA4"
                         };
 
 
@@ -439,6 +437,10 @@ gboolean is_iot_module_fw() {
     return g_is_iot_fw;
 }
 
+gboolean is_iot_pcie_device() {
+    return g_is_iot_pcie_device;
+}
+
 gboolean is_iot_ssid() {
     return g_is_iot_ssid;
 }
@@ -459,7 +461,7 @@ pwl_device_type_t pwl_get_device_type() {
                 if (pwl_module_device_id_exist(PWL_DEVICE_TYPE_USB, usbid_info[j])) {
                     PWL_LOG_INFO("Device type usb");
                     g_device_type = PWL_DEVICE_TYPE_USB;
-
+                    
                     // Check if IOT SSID
                     if (i >= IOT_START_INDEX)
                         g_is_iot_ssid = TRUE;
@@ -479,6 +481,13 @@ pwl_device_type_t pwl_get_device_type() {
                 if (pwl_module_device_id_exist(PWL_DEVICE_TYPE_PCIE, pcieid_info[j])) {
                     PWL_LOG_INFO("Device type pcie");
                     g_device_type = PWL_DEVICE_TYPE_PCIE;
+
+                    // Check if IOT SSID
+                    if (i >= IOT_START_INDEX)
+                        g_is_iot_pcie_device = TRUE;
+                    else
+                        g_is_iot_pcie_device = FALSE;
+
                     return PWL_DEVICE_TYPE_PCIE;
                 }
             }
