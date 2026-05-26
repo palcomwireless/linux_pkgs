@@ -182,6 +182,8 @@ typedef enum {
     PWL_CID_DELETE_ESIM_TEST_PROF,
     PWL_CID_RESTORE_SN,
     PWL_CID_RESTORE_IMEI,
+    PWL_CID_SET_DISABLE_HWSAR_0, 
+    PWL_CID_SET_DISABLE_HWSAR_1,
     PWL_CID_MADPT_RESTART,
     PWL_CID_SETUP_JP_FCC_CONFIG,
     PLW_CID_MAX_MADPT,
@@ -320,6 +322,7 @@ gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size);
 gboolean pwl_set_command(const gchar *command, gchar **response);
 gboolean pwl_set_command_available();
 gboolean is_iot_module_fw();
+gboolean is_iot_pcie_device();
 gboolean is_iot_ssid();
 gboolean is_iot_image(const char *image);
 int get_fw_main_version(const char *input);
