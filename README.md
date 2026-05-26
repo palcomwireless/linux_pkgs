@@ -179,3 +179,7 @@ To install services
 - version: 4.7.6
     - Add one additional supported USB SSID.
     - Fix PCIoT and Non-PCIoT cross download issue.
+
+- version: 4.7.7
+    - Add one additional supported PCIe SSID.
+    - Sync Windows FW update mechanism.
