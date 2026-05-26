@@ -153,6 +153,7 @@ gint get_sn_and_imei();
 gint efs_recovery_process();
 gint prepare_recovery_image();
 gint post_message_queue_action(int action);
+gint set_disable_hwsar_mode(void);
 char *get_test_sku_id();
 void signal_callback_retry_fw_update(const gchar* arg);
 void registerSignalCallback(signal_callback_t *callback);
