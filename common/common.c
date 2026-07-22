@@ -55,13 +55,14 @@ char *pcie_devices[] = { "0D4D", "0D4E", "0D4F", "0D65", "0CDD",
                          "0CF4", "0CF5", "0CF1", "0CDB",
                          //======
                         "0DBD", "0E1A", "0E38", "0E1B", "0E1D", 
-                        "0E1C", "0E1E", "0E33", "0E34", "0E1F", 
-                        "0E20", "0E22", "0E21", "0E25", "0E23", 
-                        "0E24", "0E27", "0E31", "0E32", "0E26", 
-                        "0E28", "0E3E", "0E3F", "0E82", "0E83", 
-                        "0E84", "0E85", "0E5F", "0E65", "0E5B", 
-                        "0E69", "0E60", "0E66", "0E5C", "0E6A", 
-                        "0EA3", "0EA4"
+                        "0E1C", "0E1E", "0E33", "0E3C", "0E34", 
+                        "0E3D", "0E3A", "0E3B", "0E1F", "0E20", 
+                        "0E22", "0E21", "0E25", "0E23", "0E24", 
+                        "0E27", "0E31", "0E32", "0E26", "0E28", 
+                        "0E3E", "0E3F", "0E82", "0E83", "0E84", 
+                        "0E85", "0E5F", "0E65", "0E5B", "0E69", 
+                        "0E60", "0E66", "0E5C", "0E6A", "0EA3", 
+                        "0EA4"
                         };
 
 
@@ -483,7 +484,7 @@ pwl_device_type_t pwl_get_device_type() {
                     g_device_type = PWL_DEVICE_TYPE_PCIE;
 
                     // Check if IOT SSID
-                    if (i >= IOT_START_INDEX)
+                    if (i >= PCIE_IOT_START_INDEX)
                         g_is_iot_pcie_device = TRUE;
                     else
                         g_is_iot_pcie_device = FALSE;
