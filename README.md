@@ -183,3 +183,6 @@ To install services
 - version: 4.7.7
     - Add one additional supported PCIe SSID.
     - Sync Windows FW update mechanism.
+
+- version: 4.7.8
+    - Add one additional supported PCIe SSID.
