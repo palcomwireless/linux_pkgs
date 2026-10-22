@@ -51,5 +51,12 @@
 
     <method name="RequestFwUpdateCheckMethod">
     </method>
+
+    <!-- pwl_pref calls this when it has finished refreshing the firmware
+         versions and the carrier after a GetFwVersionSignal. pwl_core holds
+         the matching NoticeModuleRecoveryFinish until then, so fwupdate
+         never checks against stale values. -->
+    <method name="FwVersionUpdatedMethod">
+    </method>
   </interface>
 </node>
