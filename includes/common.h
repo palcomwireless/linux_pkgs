@@ -322,6 +322,19 @@ gboolean pwl_find_mbim_port(gchar *port_buff_ptr, guint32 port_buff_size);
 gboolean pwl_set_command(const gchar *command, gchar **response);
 gboolean pwl_set_command_available();
 gboolean is_iot_module_fw();
+// pwl_module_fw_category() results
+#define PWL_IOT_UNKNOWN  (-1)
+#define PWL_IOT_NO        0
+#define PWL_IOT_YES       1
+int pwl_module_fw_category();
+
+/* A send into another daemon's queue that waits at most
+ * PWL_MQ_SEND_TIMEOUT_SEC for room, then gives up with -1 (errno ETIMEDOUT)
+ * and logs it. Every daemon replies from the same thread that drains its own
+ * queue, so an unbounded mq_send() there stalls madpt, pref and fwupdate in
+ * a ring the moment one queue fills (ZM16, 2026-09-18). */
+#define PWL_MQ_SEND_TIMEOUT_SEC 5
+int pwl_mq_send_timed(mqd_t mq, const void *msg, size_t len, uint32_t cid);
 gboolean is_iot_pcie_device();
 gboolean is_iot_ssid();
 gboolean is_iot_image(const char *image);
