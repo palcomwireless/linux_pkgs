@@ -16,6 +16,7 @@
  */
 
 #include <stdio.h>
+#include <time.h>
 #include <sys/msg.h>
 
 #include "common.h"
@@ -448,7 +449,151 @@ void send_message_queue(uint32_t cid) {
     message.sender_id = PWL_MQ_ID_CORE;
 
     // msgsnd to send message
-    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+    pwl_mq_send_timed(mq, &message, sizeof(message), cid);
+}
+
+/*
+ * ModemManager runs the FCC unlock hook once, with a budget of a few seconds,
+ * and if it fails it parks the modem: disabled, low power, answering no AT --
+ * and never tries again on its own. Right after an enumeration, above all the
+ * first boot on new firmware, the module is not ready inside that budget, so a
+ * good module ends up with no radio (WCL, 2026-09-23: after a successful flash
+ * to 50.50 the modem sat parked for good).
+ *
+ * pwl_unlock leaves its verdict in FCC_UNLOCK_STATUS_FILE. When madpt reports
+ * the module reachable -- so the AT channel is up now -- and the last verdict
+ * was transient, and ModemManager shows the modem parked, ask it to enable
+ * again: the hook runs a second time against a ready module. A real mismatch
+ * is never retried, and a WWAN the user switched off (rfkill) is left alone.
+ */
+#define FCC_UNLOCK_STATUS_FILE  "/run/pwl/fcc-unlock.status"
+#define MM_REENABLE_POLL_SEC    15    // how often the status file is looked at
+#define MM_REENABLE_WAIT_SEC    30    // how long to give ModemManager after asking
+#define MM_REENABLE_LIMIT       3     // asks per parked episode
+#define MM_REENABLE_STALE_SEC   60    // a "running" older than this never finished
+static int    g_mm_reenable_attempts = 0;
+static time_t g_mm_reenable_last_ask = 0;
+static char   g_mm_reenable_seen[64] = "";   // status file contents already acted on
+
+static gboolean read_unlock_status(char *buf, size_t len) {
+    FILE *fp = fopen(FCC_UNLOCK_STATUS_FILE, "r");
+    if (fp == NULL)
+        return FALSE;
+    gboolean ok = (fscanf(fp, "%63s", buf) == 1);
+    fclose(fp);
+    return ok;
+}
+
+static gboolean wwan_soft_blocked(void) {
+    for (int i = 0; i < 16; i++) {
+        char path[64], val[16] = {0};
+        FILE *fp;
+        snprintf(path, sizeof path, "/sys/class/rfkill/rfkill%d/type", i);
+        fp = fopen(path, "r");
+        if (fp == NULL)
+            continue;
+        if (fgets(val, sizeof val, fp) == NULL) { fclose(fp); continue; }
+        fclose(fp);
+        if (strncmp(val, "wwan", 4) != 0)
+            continue;
+        snprintf(path, sizeof path, "/sys/class/rfkill/rfkill%d/soft", i);
+        fp = fopen(path, "r");
+        if (fp == NULL)
+            continue;
+        val[0] = 0;
+        if (fgets(val, sizeof val, fp) && val[0] == '1') { fclose(fp); return TRUE; }
+        fclose(fp);
+    }
+    return FALSE;
+}
+
+// disabled + low power is how ModemManager leaves a modem whose enable failed
+static gboolean mm_modem_parked(void) {
+    gboolean disabled = FALSE, low = FALSE;
+    char line[256];
+    FILE *fp = popen("mmcli -m any -K 2>/dev/null", "r");
+    if (fp == NULL)
+        return FALSE;
+    while (fgets(line, sizeof line, fp)) {
+        if (strstr(line, "modem.generic.state ") && strstr(line, "disabled"))
+            disabled = TRUE;
+        if (strstr(line, "modem.generic.power-state") && strstr(line, "low"))
+            low = TRUE;
+    }
+    pclose(fp);
+    return disabled && low;
+}
+
+// Periodic: the status file is cheap to read, mmcli is only run once it says
+// the last hook run failed for a transient reason. Polling rather than being
+// triggered by madpt, because after a flash the module can stay unopenable
+// for our own daemons for minutes while ModemManager has already parked it
+// (WCL 2026-09-23 14:05: madpt never got "opened", so a trigger tied to it
+// never fired and the modem stayed parked).
+static gboolean mm_reenable_poll(gpointer data) {
+    char status[64] = {0};
+    char stamp[64] = {0};
+    FILE *fp = fopen(FCC_UNLOCK_STATUS_FILE, "r");
+    if (fp == NULL)
+        return G_SOURCE_CONTINUE;                     // hook never ran on this host
+    if (fscanf(fp, "%63s %63s", status, stamp) < 1) { fclose(fp); return G_SOURCE_CONTINUE; }
+    fclose(fp);
+
+    char key[64];
+    snprintf(key, sizeof key, "%s/%s", status, stamp);
+    // Worth another hook run: the module could not be read or opened, it
+    // refused the challenge (WCL 2026-09-23 15:33: a module ModemManager had
+    // just parked answered the unlock with an error, and passed on the next
+    // enumeration), a hook that passed yet ModemManager still parked the
+    // modem, or a hook that never wrote its verdict (killed by the
+    // dispatcher). A host/module mismatch is final and never retried.
+    gboolean retryable = strcmp(status, "unreadable") == 0 || strcmp(status, "mbim") == 0 ||
+                         strcmp(status, "challenge") == 0  || strcmp(status, "ok") == 0;
+    if (strcmp(status, "running") == 0) {
+        long started = atol(stamp);
+        retryable = (started > 0 && time(NULL) - started > MM_REENABLE_STALE_SEC);
+    }
+    if (!retryable) {
+        // a final verdict, or a hook still running: nothing to do, and a
+        // new episode starts from zero attempts
+        if (strcmp(key, g_mm_reenable_seen) != 0) { g_mm_reenable_attempts = 0; g_mm_reenable_last_ask = 0; }
+        strncpy(g_mm_reenable_seen, key, sizeof g_mm_reenable_seen - 1);
+        return G_SOURCE_CONTINUE;
+    }
+    if (time(NULL) - g_mm_reenable_last_ask < MM_REENABLE_WAIT_SEC)
+        return G_SOURCE_CONTINUE;                     // gave ModemManager a chance already, wait for the outcome
+    if (!mm_modem_parked())
+        return G_SOURCE_CONTINUE;                     // ModemManager is still trying by itself; look again later
+    if (wwan_soft_blocked()) {
+        if (strcmp(key, g_mm_reenable_seen) != 0)
+            PWL_LOG_DEBUG("FCC unlock was aborted (%s) but WWAN is rfkill-blocked; leaving the modem alone", status);
+        strncpy(g_mm_reenable_seen, key, sizeof g_mm_reenable_seen - 1);
+        return G_SOURCE_CONTINUE;
+    }
+    if (g_mm_reenable_attempts >= MM_REENABLE_LIMIT) {
+        if (strcmp(key, g_mm_reenable_seen) != 0)
+            PWL_LOG_ERR("FCC unlock still not done after %d re-enables; giving up until the next enumeration", MM_REENABLE_LIMIT);
+        strncpy(g_mm_reenable_seen, key, sizeof g_mm_reenable_seen - 1);
+        return G_SOURCE_CONTINUE;
+    }
+    g_mm_reenable_attempts++;
+    g_mm_reenable_last_ask = time(NULL);
+    strncpy(g_mm_reenable_seen, key, sizeof g_mm_reenable_seen - 1);
+    PWL_LOG_INFO("FCC unlock did not stick (%s) and ModemManager parked the modem; asking it to enable again (%d/%d)",
+                 status, g_mm_reenable_attempts, MM_REENABLE_LIMIT);
+    fp = popen("mmcli -m any -e 2>&1", "r");
+    if (fp) {
+        char line[256];
+        while (fgets(line, sizeof line, fp)) { line[strcspn(line, "\n")] = 0; PWL_LOG_DEBUG("  mmcli: %s", line); }
+        pclose(fp);
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static void start_mm_reenable_poll(void) {
+    if (pwl_get_device_type() != PWL_DEVICE_TYPE_USB)
+        return;
+    g_timeout_add_seconds(MM_REENABLE_POLL_SEC, mm_reenable_poll, NULL);
 }
 
 static gboolean madpt_ready_method(pwlCore     *object,
@@ -468,16 +613,72 @@ static gboolean request_update_fw_version(pwlCore     *object,
     return TRUE;
 }
 
+/*
+ * "Refresh the versions, then check for an update" used to be two signals
+ * sent back to back: GetFwVersionSignal to pref and NoticeModuleRecoveryFinish
+ * to fwupdate. fwupdate then slept ten seconds and hoped pref was done. After
+ * a SIM swap ModemManager re-probes the modem and pref can take 40 s to get an
+ * answer, so fwupdate checked against the old carrier and an empty version
+ * and recorded "no update needed" (ZM16, 2026-09-21).
+ *
+ * Now the second signal waits for pref: pref reports FwVersionUpdatedMethod
+ * when its query is over, and only then does fwupdate get told. A timer
+ * covers a pref that never answers, so the worst case is the old behaviour.
+ */
+#define FW_VERSION_WAIT_SEC 180
+static gint g_pending_recovery_type = -1;
+static guint g_pending_recovery_timer = 0;
+
+static gboolean pending_recovery_timeout(gpointer data) {
+    g_pending_recovery_timer = 0;
+    if (g_pending_recovery_type >= 0) {
+        PWL_LOG_ERR("pref did not report the fw version within %d s, notifying fwupdate anyway", FW_VERSION_WAIT_SEC);
+        gint type = g_pending_recovery_type;
+        g_pending_recovery_type = -1;
+        pwl_core_emit_notice_module_recovery_finish(gp_skeleton, type);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void refresh_versions_then_notify(gint type) {
+    if (g_pending_recovery_timer != 0) {
+        g_source_remove(g_pending_recovery_timer);
+        g_pending_recovery_timer = 0;
+    }
+    g_pending_recovery_type = type;
+    pwl_core_emit_get_fw_version_signal(gp_skeleton);
+    g_pending_recovery_timer = g_timeout_add_seconds(FW_VERSION_WAIT_SEC, pending_recovery_timeout, NULL);
+}
+
+static gboolean fw_version_updated_method(pwlCore     *object,
+                           GDBusMethodInvocation *invocation) {
+
+    pwl_core_complete_fw_version_updated_method(object, invocation);
+    if (g_pending_recovery_type < 0) {
+        // A refresh nobody was waiting on (e.g. after a successful flash).
+        return TRUE;
+    }
+    PWL_LOG_DEBUG("pref reported fw version updated, notify fwupdate to check for update");
+    if (g_pending_recovery_timer != 0) {
+        g_source_remove(g_pending_recovery_timer);
+        g_pending_recovery_timer = 0;
+    }
+    gint type = g_pending_recovery_type;
+    g_pending_recovery_type = -1;
+    pwl_core_emit_notice_module_recovery_finish(gp_skeleton, type);
+    return TRUE;
+}
+
 static gboolean request_fw_update_check(pwlCore     *object,
                            GDBusMethodInvocation *invocation) {
 
     PWL_LOG_DEBUG("Received request, send signal do fw update check");
     if (!gb_recoverying) {
-        pwl_core_emit_get_fw_version_signal(gp_skeleton);
-        pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLZ);
+        refresh_versions_then_notify(PCIE_UPDATE_BASE_FLZ);
     } else {
         PWL_LOG_DEBUG("Recovery under going, skip fw update check request");
     }
+    pwl_core_complete_request_fw_update_check_method(object, invocation);
     return TRUE;
 }
 
@@ -743,6 +944,7 @@ static void bus_acquired_hdl(GDBusConnection *connection,
     (void) g_signal_connect(gp_skeleton, "handle-madpt-ready-method", G_CALLBACK(madpt_ready_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-request-update-fw-version-method", G_CALLBACK(request_update_fw_version), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-request-fw-update-check-method", G_CALLBACK(request_fw_update_check), NULL);
+    (void) g_signal_connect(gp_skeleton, "handle-fw-version-updated-method", G_CALLBACK(fw_version_updated_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-ready-to-fcc-unlock-method", G_CALLBACK(ready_to_fcc_unlock_method), NULL);
     (void) g_signal_connect(gp_skeleton, "handle-gpio-reset-method", G_CALLBACK(gpio_reset_method), NULL);
     //(void) g_signal_connect(gp_skeleton, "handle-request-retry-fw-update-method", G_CALLBACK(request_retry_fw_update_method), NULL);
@@ -1052,10 +1254,10 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
                 PWL_LOG_DEBUG("Check module pass!");
                 PWL_LOG_DEBUG("Notify fwupdate start extract flz and check for update");
 
-                // Notice pref to update fw version
+                // Notice pref to update fw version; fwupdate is told when
+                // pref is done (see refresh_versions_then_notify)
                 PWL_LOG_INFO("Notify pref to update fw version");
-                pwl_core_emit_get_fw_version_signal(gp_skeleton);
-                pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLZ);
+                refresh_versions_then_notify(PCIE_UPDATE_BASE_FLZ);
                 break;
             }
         }
@@ -1072,10 +1274,10 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
                 // Check if flash data folder exist
                 if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 ||
                     access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
-                    // Notice pref to update fw version
+                    // Notice pref to update fw version; fwupdate is told
+                    // when pref is done (see refresh_versions_then_notify)
                     PWL_LOG_INFO("Notify pref to update fw version");
-                    pwl_core_emit_get_fw_version_signal(gp_skeleton);
-                    pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLASH_FOLDER);
+                    refresh_versions_then_notify(PCIE_UPDATE_BASE_FLASH_FOLDER);
                 } else {
                     PWL_LOG_DEBUG("Flash data folder not exist, in to idle");
                 }
@@ -1098,10 +1300,10 @@ static gpointer mbim_monitor_thread_func(gpointer data) {
                 // Check if flash data folder exist
                 if (access(UPDATE_FW_FOLDER_FILE, F_OK) == 0 ||
                     access(UPDATE_DEV_FOLDER_FILE, F_OK) == 0) {
-                    // Notice pref to update fw version
+                    // Notice pref to update fw version; fwupdate is told
+                    // when pref is done (see refresh_versions_then_notify)
                     PWL_LOG_INFO("Notify pref to update fw version");
-                    pwl_core_emit_get_fw_version_signal(gp_skeleton);
-                    pwl_core_emit_notice_module_recovery_finish(gp_skeleton, PCIE_UPDATE_BASE_FLASH_FOLDER);
+                    refresh_versions_then_notify(PCIE_UPDATE_BASE_FLASH_FOLDER);
                 } else {
                     PWL_LOG_DEBUG("Flash data folder not exist, in to idle");
                 }
@@ -1246,6 +1448,7 @@ gint main() {
 
     gp_loop = g_main_loop_new(NULL, FALSE);
 
+    start_mm_reenable_poll();
     g_main_loop_run(gp_loop);
 
     pci_mbim_device_deinit();
