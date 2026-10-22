@@ -27,7 +27,7 @@ pthread_cond_t g_device_cond = PTHREAD_COND_INITIALIZER;
 static MbimDevice *g_device;
 static GCancellable *g_cancellable;
 mbim_device_ready_callback g_ready_cb;
-static gboolean g_device_opened = FALSE;
+static gint g_device_opened = FALSE;   // written on the main loop, read from the message thread
 
 
 static void at_command_query_cb(MbimDevice *dev, GAsyncResult *res, gpointer user_data) {
@@ -85,6 +85,30 @@ void pwl_mbimdeviceadpt_at_req(madpt_mbim_intf_t intf, char *command, mbim_at_re
 
     if (DEBUG) PWL_LOG_DEBUG("cmd: %s", command);
 
+    // Between a deinit (module reset, error threshold) and the next open
+    // there is no device to talk to. mbim_device_command() on a NULL or
+    // unopened object only trips a GLib assertion and never calls back, so
+    // the requester sat out its full timeout for nothing. Answer as a query
+    // error instead: that counts towards the error threshold and gets the
+    // device re-initialised.
+    //
+    // Right after a re-init (pwl_mbimdeviceadpt_init() was called, the open
+    // is in flight on the main loop) the open completes within about a
+    // second. Failing at once there sent every queued command into the
+    // window, each failure counted towards the threshold, the threshold
+    // re-initialised the device again, and madpt never got out of the loop
+    // ("Set preferred carrier fail" after a flash, test-9 2026-09-24 and
+    // 2026-10-01). So give an in-flight open a few seconds first.
+    if (g_cancellable != NULL && !g_atomic_int_get(&g_device_opened)) {
+        for (int i = 0; i < 30 && !g_atomic_int_get(&g_device_opened); i++)
+            g_usleep(100 * 1000);
+    }
+    if (g_device == NULL || !g_atomic_int_get(&g_device_opened)) {
+        PWL_LOG_ERR("MBIM device not open, cannot send: %s", command);
+        if (cb) cb((unsigned char *)"QUERY ERROR");
+        return;
+    }
+
     g_autoptr(MbimMessage) message = NULL;
 
     size_t command_req_size = strlen(command) + strlen("\r\n") + 1;
@@ -123,6 +147,13 @@ static void mbim_device_close_cb(MbimDevice *dev, GAsyncResult *res) {
 static void device_close() {
     PWL_LOG_INFO("MBIM Device close");
 
+    if (g_device == NULL) {
+        // Nothing to close (the previous open failed or never completed);
+        // wake the deinit waiter right away instead of asserting.
+        pthread_cond_signal(&g_device_cond);
+        return;
+    }
+    g_device_opened = FALSE;
     mbim_device_close(g_device, PWL_CLOSE_MBIM_TIMEOUT_SEC, NULL,
                      (GAsyncReadyCallback) mbim_device_close_cb, NULL);
 
@@ -135,10 +166,10 @@ static void device_open_cb(MbimDevice *dev, GAsyncResult *res) {
 
     if (!mbim_device_open_finish(dev, res, &error)) {
         PWL_LOG_ERR("Couldn't open Mbim Device: %s\n", error->message);
-        g_device_opened = FALSE;
+        g_atomic_int_set(&g_device_opened, FALSE);
     } else {
         PWL_LOG_DEBUG("MBIM Device %s opened.", mbim_device_get_path_display(dev));
-        g_device_opened = TRUE;
+        g_atomic_int_set(&g_device_opened, TRUE);
     }
 
     if (g_ready_cb != NULL) {
