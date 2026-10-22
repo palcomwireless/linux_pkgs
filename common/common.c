@@ -16,6 +16,7 @@
  */
 
 #include <mqueue.h>
+#include <time.h>
 #include <stdio.h>
 #include <ctype.h>
 #include "common.h"
@@ -52,7 +53,10 @@ char *usb_devices[] = { "0CBD", "0CC1", "0CC4", "0CB5", "0CB7",
                         "0F00", "0EFF", "0EFB", "0EFE", "0EFD", 
                         "0EEB", "0EEC", "0EED", "0EEE", "0EEF", 
                         "0EA7", "0ED7", "0F07", "0EF1", "0EF3", 
-                        "0F08", "0EF2", "0EF4", "0EF5"
+                        "0F08", "0EF2", "0EF4", "0EF5",
+                        // ZXL2_IOT_SSID_Table_20260916
+                        "0F17", "0F0F", "0F15", "0F12", "0F11",
+                        "0F16", "0F0E", "0F14", "0F13", "0F10"
                      };
 
 char *pcie_devices[] = { "0D4D", "0D4E", "0D4F", "0D65", "0CDD", 
@@ -172,6 +176,17 @@ const SsidSkuMap ssid_sku_table[] = {
     { "0EF2", "4131021" },
     { "0EF4", "4131021" },
     { "0EF5", "4131022" },
+    // ZXL2_IOT_SSID_Table_20260916
+    { "0F17", "4131026" },
+    { "0F0F", "4131027" },
+    { "0F15", "4131027" },
+    { "0F12", "4131024" },
+    { "0F11", "4131027" },
+    { "0F16", "4131021" },
+    { "0F0E", "4131023" },
+    { "0F14", "4131023" },
+    { "0F13", "4131021" },
+    { "0F10", "4131023" },
 };
 size_t ssid_sku_table_count = sizeof(ssid_sku_table) / sizeof(ssid_sku_table[0]);
 
@@ -441,8 +456,21 @@ gboolean is_iot_image(const char *image) {
     else return FALSE;
 }
 
-gboolean is_iot_module_fw() {
+/*
+ * IOT category of the firmware the module is running, asked over AT.
+ *
+ * Returns PWL_IOT_YES, PWL_IOT_NO, or PWL_IOT_UNKNOWN when the module did
+ * not answer (no response, no OK, or a version string that does not parse).
+ * The distinction matters: right after the module re-enumerates the AT
+ * channel is not up yet, and a caller that compares the answer with the
+ * machine's SKU category must not read "no answer" as "non-IOT" -- on an
+ * IOT machine that turned into "SKU & FW not match" and aborted the FCC
+ * unlock, after which ModemManager left the module in low power where it
+ * answers no AT at all (WCL, 2026-09-21 and 2026-09-23).
+ */
+int pwl_module_fw_category() {
     gchar *response = NULL;
+    int result = PWL_IOT_UNKNOWN;
     if (pwl_set_command("at*bfwver", &response)) {
         if (response != NULL && strstr(response, "OK") != NULL) {
             if (DEBUG) PWL_LOG_DEBUG("fwver: %s", response);
@@ -451,14 +479,24 @@ gboolean is_iot_module_fw() {
             int version = get_fw_main_version(response);
             if (DEBUG) PWL_LOG_DEBUG("fw main version: %d", version);
             if (version >= 50)
-                g_is_iot_fw = TRUE;
-            else
-                g_is_iot_fw = FALSE;
+                result = PWL_IOT_YES;
+            else if (version >= 0)
+                result = PWL_IOT_NO;
         }
     }
     if (response) {
         free(response);
     }
+    if (result != PWL_IOT_UNKNOWN)
+        g_is_iot_fw = (result == PWL_IOT_YES);
+    return result;
+}
+
+// Kept for callers that only want the last definite answer; a failed read
+// leaves the previous value in place. New code should use
+// pwl_module_fw_category() and handle PWL_IOT_UNKNOWN.
+gboolean is_iot_module_fw() {
+    pwl_module_fw_category();
     return g_is_iot_fw;
 }
 
@@ -553,6 +591,21 @@ gboolean cond_wait(pthread_mutex_t *mutex, pthread_cond_t *cond, gint wait_time)
     return TRUE;
 }
 
+int pwl_mq_send_timed(mqd_t mq, const void *msg, size_t len, uint32_t cid) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += PWL_MQ_SEND_TIMEOUT_SEC;
+    if (mq_timedsend(mq, msg, len, 0, &deadline) != 0) {
+        // The receiver's queue stayed full for the whole timeout: it is not
+        // draining. Drop the message; the requester's own timeout covers it.
+        int saved = errno;   // logging clobbers it; callers may still want it
+        PWL_LOG_ERR("cid %s not sent: %s", cid_name[cid], strerror(saved));
+        errno = saved;
+        return -1;
+    }
+    return 0;
+}
+
 void send_message_reply(uint32_t cid,
                         uint32_t sender_id,
                         uint32_t dest_id,
@@ -582,7 +635,7 @@ void send_message_reply(uint32_t cid,
     }
 
     // msgsnd to send message
-    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+    pwl_mq_send_timed(mq, &message, sizeof(message), cid);
 }
 
 void print_message_info(msg_buffer_t* message) {
