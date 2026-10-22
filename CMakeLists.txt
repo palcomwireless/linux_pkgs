@@ -30,13 +30,22 @@ install(FILES "${PROJECT_SOURCE_DIR}/common/mcc_mnc_list.csv" DESTINATION "${CMA
 
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "pwl-linux-pkgs")
-set(CPACK_PACKAGE_VERSION "4.7.9")
+set(CPACK_PACKAGE_VERSION "4.7.10")
 set(CPACK_DEBIAN_PACKAGE_SECTION "base")
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "PWL")
 set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "PWL Linux service packages")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "standard")
+# madpt uses mbim_message_compal_at_command_*, new in libmbim 1.32; on 1.31
+# every service fails to load (colleague report 2026-10-02).
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libmbim-glib4 (>= 1.32)")
+# Canonical's split packages install the same /opt/pwl tree (the Dell 24.04d
+# image puts pwl-pc-services 4.7.5 on at first boot); with Replaces as well,
+# dpkg takes them off when this package goes on.
+set(PWL_CANONICAL_PKGS "pwl-pc-services, pwl-core-service, pwl-fwupdate-service, pwl-madpt-service, pwl-pref-service, pwl-unlock-service, pwl-test-quick-suspend-resume")
+set(CPACK_DEBIAN_PACKAGE_CONFLICTS "${PWL_CANONICAL_PKGS}")
+set(CPACK_DEBIAN_PACKAGE_REPLACES "${PWL_CANONICAL_PKGS}")
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${DEB_EXTRA}/postinst;${DEB_EXTRA}/postrm;${DEB_EXTRA}/preinst;${DEB_EXTRA}/prerm")
 include(CPack)
 
