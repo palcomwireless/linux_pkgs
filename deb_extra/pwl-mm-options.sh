@@ -31,8 +31,13 @@ fi
 
 exec_command=${exec_start#ExecStart=}
 
+# exec, so ModemManager is the unit's main process: when it aborts (test-9
+# 2026-09-24, MM 1.24.2 "enable: code should not be reached" after a module
+# reset during the FCC unlock hook) systemd's Restart=on-abort restarts it.
+# Run as a child of this script, the abort became a plain exit 134 of the
+# script and ModemManager stayed down until the next reboot.
 if [ -z "$device" ] && [ -z "$usb_device" ]; then
-    $exec_command
+    exec $exec_command
 else
     help=`ModemManager -h`
     available_options=()
@@ -53,6 +58,5 @@ else
             echo "$opt not available!"
         fi
     done
-    exec="$exec_command ${available_options[*]}"
-    $exec
+    exec $exec_command ${available_options[*]}
 fi
