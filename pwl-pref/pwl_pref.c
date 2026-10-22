@@ -219,7 +219,7 @@ void send_message_queue(uint32_t cid) {
     message.sender_id = PWL_MQ_ID_PREF;
 
     // msgsnd to send message
-    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+    pwl_mq_send_timed(mq, &message, sizeof(message), cid);
 }
 
 void signal_callback_get_fw_version(const gchar* arg) {
@@ -414,6 +414,10 @@ void signal_callback_get_fw_version(const gchar* arg) {
         }
     }
     g_check_sim_carrier_on_going = FALSE;
+    // Tell pwl_core the versions and carrier are current. core holds the
+    // "check for update" signal to fwupdate until this arrives, so fwupdate
+    // never checks against the values from before a SIM swap.
+    pwl_core_call_fw_version_updated_method(gp_proxy, NULL, NULL, NULL);
     return;
 }
 
@@ -569,7 +573,7 @@ void send_message_queue_with_content(uint32_t cid, char *content) {
     strcpy(message.content, content);
 
     // msgsnd to send message
-    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+    pwl_mq_send_timed(mq, &message, sizeof(message), cid);
 }
 
 gint set_preferred_carrier(char *carrier, int retry_limit) {
