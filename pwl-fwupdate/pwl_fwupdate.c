@@ -126,6 +126,16 @@ gboolean g_is_fastboot_cmd_error = FALSE;
 // int g_wait_at_port_retry_count;
 int g_do_hw_reset_count;
 int g_fw_update_retry_count;
+void post_flash_recovery(void);
+// Set by start_update_process_pcie() when it gave up before deciding
+// anything because the module did not answer (version or carrier). The
+// recovery-finish handler then asks for another check later rather than
+// recording "no update needed".
+gboolean g_fw_check_incomplete = FALSE;
+guint g_fw_check_retry_source = 0;
+int g_fw_check_retry_attempts = 0;
+#define FW_CHECK_RETRY_INTERVAL_SEC   30
+#define FW_CHECK_RETRY_LIMIT          5
 int g_need_retry_fw_update;
 bool g_need_update = false;
 int g_testprofile_delete_counter = 0;
@@ -500,7 +510,7 @@ void send_message_queue(uint32_t cid) {
     message.sender_id = PWL_MQ_ID_FWUPDATE;
 
     // msgsnd to send message
-    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+    pwl_mq_send_timed(mq, &message, sizeof(message), cid);
 }
 
 void send_message_queue_with_content(uint32_t cid, char *content) {
@@ -515,7 +525,7 @@ void send_message_queue_with_content(uint32_t cid, char *content) {
     strcpy(message.content, content);
 
     // msgsnd to send message
-    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+    pwl_mq_send_timed(mq, &message, sizeof(message), cid);
 }
 
 void* msg_queue_thread_func(void *args) {
@@ -1659,6 +1669,15 @@ int download_process( void *argu_ptr, gboolean efs_recovery_mode ) {
     */
     update_progress_dialog(5, "Open Mbim port...", NULL);
     PWL_LOG_DEBUG("\n%sFind USB port %s", fdtl_data->g_prefix_string, g_diag_modem_port[0]);
+    // The module has just re-enumerated on its new firmware. Two things go
+    // wrong from here if nothing is done (WCL, 2026-09-23): mbim-proxy still
+    // holds the device it opened before the flash so every open through it
+    // fails, and ModemManager races the slow first boot with its 5 s unlock
+    // budget, loses, and parks the modem in low power. Hold ModemManager off,
+    // wait for the module, unlock it, then let ModemManager in -- before
+    // madpt is told to reconnect. The strict-snap host integration does the
+    // same for the same reason.
+    post_flash_recovery();
     elapsed_time = get_time_info(0) - raw_time;
     sprintf( output_message, "\n%sModule boot up completed, Elapsed time: %02dm:%02ds \n", fdtl_data->g_prefix_string, elapsed_time/60, elapsed_time%60 );
     printf_fdtl_s( output_message );
@@ -2156,6 +2175,76 @@ gint get_sku_id()
     return -1;
 }
 
+#define POST_FLASH_READY_TIMEOUT_SEC   180   // first boot on new firmware: how long to wait for AT
+#define POST_FLASH_UNLOCK_TRIES        3
+#define PWL_UNLOCK_BIN                 "/opt/pwl/pwl-unlock/pwl_unlock"
+#define FCC_UNLOCK_STATUS_FILE         "/run/pwl/fcc-unlock.status"
+
+static void read_unlock_status(char *buf, size_t len) {
+    buf[0] = 0;
+    FILE *fp = fopen(FCC_UNLOCK_STATUS_FILE, "r");
+    if (fp == NULL)
+        return;
+    if (fscanf(fp, "%63s", buf) != 1)
+        buf[0] = 0;
+    fclose(fp);
+}
+
+// The module has just come back on its new firmware. For a while after that
+// first boot it answers MBIM and AT slowly (WCL 2026-09-23 15:40: the fw
+// version query took 15 s per try, an MBIM open over 4 s), and ModemManager's
+// enable -- radio on, then the FCC unlock hook with its 5 s budget -- loses
+// that race every time; after the failed enable it parks the modem in low
+// power, where the module answers nothing at all, and no retry helps. So
+// keep ModemManager away from the module until it answers promptly, run the
+// unlock ourselves, and only then let ModemManager probe it: the module is
+// then idle, unlocked, and the enable goes through without any hook.
+void post_flash_recovery(void) {
+    gboolean have_mm = (system("systemctl list-unit-files ModemManager.service >/dev/null 2>&1") == 0);
+    time_t t0 = time(NULL);
+    PWL_LOG_INFO("module re-enumerated after the flash: holding ModemManager off until the module is ready and unlocked");
+    if (have_mm && system("systemctl stop ModemManager.service 2>/dev/null") != 0)
+        PWL_LOG_ERR("ModemManager stop failed");
+    // the proxy still holds the device it opened before the flash; the next
+    // open spawns a fresh one
+    if (system("pkill -x mbim-proxy 2>/dev/null") == -1)
+        PWL_LOG_ERR("pkill mbim-proxy failed to run");
+    sleep(1);
+
+    int category = PWL_IOT_UNKNOWN;
+    while (time(NULL) - t0 < POST_FLASH_READY_TIMEOUT_SEC) {
+        category = pwl_module_fw_category();
+        if (category != PWL_IOT_UNKNOWN)
+            break;
+        sleep(3);
+    }
+    if (category == PWL_IOT_UNKNOWN) {
+        PWL_LOG_ERR("module still not answering AT %ld s after re-enumeration; letting ModemManager try anyway", (long)(time(NULL) - t0));
+    } else {
+        PWL_LOG_INFO("module answers AT %ld s after re-enumeration; running the FCC unlock", (long)(time(NULL) - t0));
+        char status[64];
+        for (int i = 1; i <= POST_FLASH_UNLOCK_TRIES; i++) {
+            unlink(FCC_UNLOCK_STATUS_FILE);   // a verdict from before the flash must not count
+            // no dispatcher budget here: let the unlock wait longer for the
+            // MBIM open (test-9 2026-09-24 09:04: 4 s was not enough on the
+            // first try after a flash, the second try passed)
+            if (system("PWL_UNLOCK_OPEN_WAIT=20 " PWL_UNLOCK_BIN " >/dev/null 2>&1") == -1)
+                PWL_LOG_ERR("could not run %s", PWL_UNLOCK_BIN);
+            read_unlock_status(status, sizeof status);
+            if (strcmp(status, "ok") == 0) {
+                PWL_LOG_INFO("FCC unlock passed after the flash (try %d/%d)", i, POST_FLASH_UNLOCK_TRIES);
+                break;
+            }
+            PWL_LOG_ERR("FCC unlock after the flash did not pass (%s), try %d/%d", status[0] ? status : "no verdict", i, POST_FLASH_UNLOCK_TRIES);
+            if (i < POST_FLASH_UNLOCK_TRIES)
+                sleep(5);
+        }
+    }
+    if (have_mm && system("systemctl start ModemManager.service 2>/dev/null") != 0)
+        PWL_LOG_ERR("ModemManager start failed");
+    PWL_LOG_INFO("ModemManager back on the module %ld s after re-enumeration", (long)(time(NULL) - t0));
+}
+
 gint get_carrier_id() {
     int err, retry = 0;
     memset(g_carrier_id, 0, sizeof(g_carrier_id));
@@ -2179,6 +2268,7 @@ gint get_carrier_id() {
         PWL_LOG_DEBUG("[Notice] carrier id: %s", g_carrier_id);
         return RET_OK;
     }
+    return RET_FAILED;
 }
 
 gint get_cxp_reboot_flag() {
@@ -2204,6 +2294,7 @@ gint get_cxp_reboot_flag() {
         PWL_LOG_DEBUG("[CXP] CXP reboot: %d", g_need_cxp_reboot);
         return RET_OK;
     }
+    return RET_FAILED;
 }
 
 gint get_current_fw_version()
@@ -3283,11 +3374,28 @@ int start_update_process(gboolean is_startup, gboolean efs_recovery_mode) {
     int ret = 0;
 
     if (efs_recovery_mode == FALSE) {
-        // Check if SSID and current module fw version belong to the same category
-        gboolean iot_fw = is_iot_module_fw();
+        // Check if SSID and current module fw version belong to the same
+        // category. "Could not read" is not "non-IOT": right after the module
+        // re-enumerates the AT channel is not up yet (WCL, 2026-09-23 --
+        // "pwl find mbim port fail!" then "Is IOT FW: 0"). Ask a few times,
+        // and if it still cannot be read abort this attempt without the
+        // mismatch verdict; the retry path asks again later.
+        int iot_fw = PWL_IOT_UNKNOWN;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            iot_fw = pwl_module_fw_category();
+            if (iot_fw != PWL_IOT_UNKNOWN)
+                break;
+            PWL_LOG_DEBUG("Module fw version not readable yet, retry %d", attempt + 1);
+            sleep(2);
+        }
         gboolean iot_ssid = is_iot_ssid();
         PWL_LOG_DEBUG("Is IOT FW: %d, Is IOT SSID: %d", iot_fw, iot_ssid);
-        if (iot_fw != iot_ssid) {
+        if (iot_fw == PWL_IOT_UNKNOWN) {
+            PWL_LOG_ERR("Cannot read module fw version, abort this FW update attempt");
+            close_progress_msg_box(CLOSE_TYPE_RETRY);
+            return -1;
+        }
+        if ((iot_fw == PWL_IOT_YES) != iot_ssid) {
             PWL_LOG_ERR("SSID & FW not match, abort FW update");
             close_progress_msg_box(CLOSE_TYPE_ERROR);
             return -1;
@@ -3522,13 +3630,41 @@ void remove_flash_data(int type) {
     }*/
 }
 
+// Deferred re-check, armed when a check could not be completed because the
+// module did not answer. Goes through pwl_core so pref refreshes its copy of
+// the versions first; core signals us again when that is done.
+static gboolean fw_check_retry_cb(gpointer data) {
+    g_fw_check_retry_source = 0;
+    g_fw_check_retry_attempts++;
+    PWL_LOG_DEBUG("[Notice] Re-run fw update check (attempt %d/%d)",
+                  g_fw_check_retry_attempts, FW_CHECK_RETRY_LIMIT);
+    pwl_core_call_request_fw_update_check_method(gp_proxy, NULL, NULL, NULL);
+    return G_SOURCE_REMOVE;
+}
+
+static void schedule_fw_check_retry(void) {
+    if (g_fw_check_retry_source != 0)
+        return;
+    if (g_fw_check_retry_attempts >= FW_CHECK_RETRY_LIMIT) {
+        PWL_LOG_ERR("[Notice] Module still not answering after %d re-checks, giving up until the next SIM/recovery event",
+                    FW_CHECK_RETRY_LIMIT);
+        g_fw_check_retry_attempts = 0;
+        return;
+    }
+    PWL_LOG_DEBUG("[Notice] Module did not answer, re-check in %d s", FW_CHECK_RETRY_INTERVAL_SEC);
+    g_fw_check_retry_source = g_timeout_add_seconds(FW_CHECK_RETRY_INTERVAL_SEC, fw_check_retry_cb, NULL);
+}
+
 void signal_callback_notice_module_recovery_finish(int type) {
     int already_retry_count;
     if (g_device_type == PWL_DEVICE_TYPE_PCIE) {
         PWL_LOG_DEBUG("[Notice] Receive module recovery completed signal!");
         PWL_LOG_DEBUG("[Notice] type is: %d", type);
-        PWL_LOG_DEBUG("[Notice] Sleep 10 secs to wait for pref to update version");
-        sleep(10);
+        // No fixed wait here any more. pwl_core sends this signal only after
+        // pwl_pref has finished refreshing the versions (or its own timeout
+        // ran out), so the values we are about to ask pref for are current.
+        // The old sleep(10) lost the race whenever ModemManager was
+        // re-probing the modem after a SIM swap (ZM16, 2026-09-21).
         set_disable_hwsar_mode();
         if (check_update_data(type) != RET_OK) {
             PWL_LOG_ERR("Check flash data error, abort.");
@@ -3538,29 +3674,50 @@ void signal_callback_notice_module_recovery_finish(int type) {
         if (g_is_fw_update_processing == NOT_IN_FW_UPDATE_PROCESSING) {
             if (start_update_process_pcie(TRUE, type) == RET_OK) {
                 // Download success, remove flash data folder
+                g_fw_check_retry_attempts = 0;
                 remove_flash_data(g_update_type);
                 close_progress_msg_box(CLOSE_TYPE_SUCCESS);
                 pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
                 return;
+            } else if (g_fw_check_incomplete) {
+                // Could not even decide: the module did not answer. Not a
+                // "no update needed" -- ask again later.
+                schedule_fw_check_retry();
+                return;
             } else {
+                g_fw_check_retry_attempts = 0;
                 PWL_LOG_DEBUG("Need update? %s", (g_need_update) ? "Yes" : "No");
                 if (g_need_update) {
                     close_progress_msg_box(CLOSE_TYPE_RETRY);
                     get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
                     PWL_LOG_DEBUG("[Notice] already_retry_count: %d", already_retry_count);
-                    while (already_retry_count < FW_UPDATE_RETRY_TH) {
+                    // Bounded: the counter in the status file ends the loop
+                    // after FW_UPDATE_RETRY_TH failed flashes, and the
+                    // attempt cap ends it when an attempt aborts before
+                    // flashing (which does not advance the counter) -- that
+                    // combination is what spun 300 times a minute on 09-18.
+                    int attempts = 0;
+                    while (already_retry_count < FW_UPDATE_RETRY_TH && attempts < FW_UPDATE_RETRY_TH + 1) {
+                        attempts++;
                         PWL_LOG_DEBUG("[Notice] Retry fw udpate");
                         if (start_update_process_pcie(TRUE, type) == RET_OK) {
                             remove_flash_data(g_update_type);
                             close_progress_msg_box(CLOSE_TYPE_SUCCESS);
                             pwl_core_call_request_update_fw_version_method(gp_proxy, NULL, NULL, NULL);
                             break;
-                        } else {
-                            get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
-                            if (already_retry_count >= FW_UPDATE_RETRY_TH)
-                                close_progress_msg_box(CLOSE_TYPE_ERROR);
                         }
+                        if (g_fw_check_incomplete) {
+                            // Lost the module mid-way; come back later
+                            // rather than hammering it.
+                            close_progress_msg_box(CLOSE_TYPE_RETRY);
+                            schedule_fw_check_retry();
+                            return;
+                        }
+                        get_fw_update_status_value(FW_UPDATE_RETRY_COUNT, &already_retry_count);
                     }
+                    // Whatever is still on screen from the last failed
+                    // attempt: a no-op when the dialog is already closed.
+                    close_progress_msg_box(CLOSE_TYPE_ERROR);
                 }
             }
             // Check if need cxp reboot
@@ -5097,10 +5254,16 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
     char sku_id[PWL_MAX_SKUID_SIZE] = {0};
     char fw_package_ver[30] = {0};
     g_need_update = false;
+    g_fw_check_incomplete = FALSE;
     // Get subsysid
     get_fwupdate_subsysid(subsysid);
     // Get carrier id
-    get_carrier_id();
+    if (get_carrier_id() != RET_OK) {
+        // Same as an unreadable version: without the carrier the image
+        // lookup would run against a stale id (the pre-SIM-swap one).
+        g_fw_check_incomplete = TRUE;
+        return RET_FAILED;
+    }
     get_cxp_reboot_flag();
 
     // Get SKU id
@@ -5109,7 +5272,11 @@ int start_update_process_pcie(gboolean is_startup, int based_type) {
 
     if (based_type == PCIE_UPDATE_BASE_FLZ) {
         if (get_current_fw_version() != RET_OK) {
+            // Not a verdict on whether an update is needed: the module did
+            // not answer. The caller schedules another check instead of
+            // treating this as "up to date".
             PWL_LOG_ERR("Get current fw version error, abort!");
+            g_fw_check_incomplete = TRUE;
             return RET_FAILED;
         }
     }
@@ -5245,8 +5412,13 @@ DO_RESET:
     update_progress_dialog(10, "Finish download...", NULL);
     g_is_fw_update_processing = NOT_IN_FW_UPDATE_PROCESSING;
     if (update_result == RET_FAILED) {
-        set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
+        // Increment first, then record. The old order wrote the previous
+        // value and bumped only the in-memory copy, which the next call
+        // re-read from the file: the count never left 0 and the retry loop
+        // in signal_callback_notice_module_recovery_finish() never ended
+        // (ZM16, 2026-09-18). The USB path always did it this way round.
         g_fw_update_retry_count++;
+        set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
         return RET_FAILED;
     } else {
         // Wait 5 sec to wait mbim port
@@ -5261,8 +5433,8 @@ DO_RESET:
             return RET_OK;
         } else {
             // Download process pass, but can't find mbim port.
-            set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
             g_fw_update_retry_count++;
+            set_fw_update_status_value(FW_UPDATE_RETRY_COUNT, g_fw_update_retry_count);
             return RET_FAILED;
         }
     }
