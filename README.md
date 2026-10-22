@@ -190,3 +190,46 @@ To install services
 - version: 4.7.9
     - Add one additional supported PCIe SSID.
     - Add one additional supported USB SSID.
+
+- version: 4.7.10
+    - Add ten additional supported USB SSIDs (ZXL2 IOT table 2026-09-16).
+    - Bound every send between the daemons to 5 s so a full queue no longer
+      hangs madpt, pref and fwupdate in a ring.
+    - Check for a firmware update only after pref has refreshed the versions
+      and carrier, instead of a fixed 10 s wait; retry the check when the
+      module did not answer instead of recording "no update needed".
+    - Fix the PCIe flash retry counter (never left 0) and bound the retry
+      loop, so a failed flash no longer retries forever with the progress
+      dialog stuck on screen.
+    - A module firmware version that cannot be read is "unknown", not
+      "non-IOT": FCC unlock and the USB update check retry instead of
+      aborting with "SKU & FW not match".
+    - FCC unlock: abort cleanly when the MBIM device does not open instead of
+      attempting the challenge anyway; leave the verdict in
+      /run/pwl/fcc-unlock.status.
+    - pwl_core: when the unlock hook failed for a transient reason and
+      ModemManager parked the modem (disabled, low power), ask ModemManager to
+      enable again once the module is reachable -- ModemManager itself never
+      retries, which left the radio off after every firmware flash.
+    - After a USB flash, once the module has re-enumerated, keep ModemManager
+      away from it until it answers AT again, run the FCC unlock, then start
+      ModemManager: the stale mbim-proxy and ModemManager's 5 s unlock budget
+      against a module on its first boot are what left the radio off after
+      every flash.
+    - FCC unlock: log the module's answer when the challenge fails instead of
+      exiting silently.
+    - pwl-mm-options.sh execs ModemManager, so that when ModemManager aborts
+      (seen with 1.24.2 after a module reset during the unlock hook) systemd's
+      Restart=on-abort brings it back instead of leaving WWAN down.
+    - The post-flash unlock run by fwupdate gets a 20 s MBIM open wait
+      (PWL_UNLOCK_OPEN_WAIT) instead of the hook's 4 s.
+    - FCC unlock on the PCIe module (ZM16) no longer compares the module's
+      IOT category with the SSID: that module has one firmware line, and
+      telling "unknown" from "non-IOT" had made the check abort there.
+    - madpt: after a module reset, wait up to 3 s for the MBIM re-open
+      instead of failing every queued command into another re-open, which
+      left the preferred carrier unset after a firmware update.
+    - FCC unlock: end the challenge at the final result code; a challenge
+      containing "OK" (about 8 %) was cut short and the unlock failed.
+    - Package: depend on libmbim-glib4 >= 1.32, and conflict with / replace
+      Canonical's split pwl-* packages, which install the same /opt/pwl.
