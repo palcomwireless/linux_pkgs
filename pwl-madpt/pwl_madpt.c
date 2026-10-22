@@ -349,7 +349,7 @@ void send_message_queue(uint32_t cid) {
     message.sender_id = PWL_MQ_ID_MADPT;
 
     // msgsnd to send message
-    mq_send(mq, (gchar *)&message, sizeof(message), 0);
+    pwl_mq_send_timed(mq, &message, sizeof(message), cid);
 }
 
 gboolean mbim_init(gboolean boot) {
