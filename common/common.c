@@ -561,16 +561,60 @@ pwl_device_type_t pwl_get_device_type() {
     return PWL_DEVICE_TYPE_UNKNOWN;
 }
 
+// The machine's SKU is in one of our tables, whether or not the module is
+// on the bus yet.
+static gboolean pwl_sku_supported() {
+    gchar skuid[PWL_MAX_SKUID_SIZE];
+    size_t i;
+
+    pwl_get_skuid(skuid, PWL_MAX_SKUID_SIZE);
+    if (skuid[0] == '\0')
+        return FALSE;
+    for (i = 0; i < sizeof(usb_devices) / sizeof(usb_devices[0]); i++)
+        if (strncmp(skuid, usb_devices[i], strlen(usb_devices[i])) == 0)
+            return TRUE;
+    for (i = 0; i < sizeof(pcie_devices) / sizeof(pcie_devices[0]); i++)
+        if (strncmp(skuid, pcie_devices[i], strlen(pcie_devices[i])) == 0)
+            return TRUE;
+    return FALSE;
+}
+
+/*
+ * Wait for the module to enumerate.
+ *
+ * A module that was rebooted with the host while it applied a new firmware
+ * finishes that update first and only then appears on the bus: 124 s and
+ * 127 s after boot (WCL, 2026-10-12). Giving up after 60 s ended fwupdate,
+ * madpt and pref with exit 0, which Restart=on-failure never restarts, so
+ * that boot ran no version check and logged nothing but "Unsupported
+ * device.". On a machine whose SKU is in our tables keep waiting; only a
+ * SKU we do not support gives up, as before, after 60 s.
+ */
+#define PWL_DEVICE_WAIT_POLL_SEC        2
+#define PWL_DEVICE_WAIT_UNSUPPORTED_SEC 60
+#define PWL_DEVICE_WAIT_LOG_SEC         300
+
 pwl_device_type_t pwl_get_device_type_await() {
     pwl_device_type_t type = PWL_DEVICE_TYPE_UNKNOWN;
+    gint waited = 0;
+    gint next_report = PWL_DEVICE_WAIT_UNSUPPORTED_SEC;
 
-    for (gint i = 0; i < 30; i++) {
+    while (TRUE) {
         type = pwl_get_device_type();
-        if (type != PWL_DEVICE_TYPE_UNKNOWN)
+        if (type != PWL_DEVICE_TYPE_UNKNOWN) {
+            if (waited >= PWL_DEVICE_WAIT_UNSUPPORTED_SEC)
+                PWL_LOG_INFO("Module found after %d s", waited);
             return type;
-        g_usleep(1000*1000*2);
+        }
+        if (waited >= next_report) {
+            if (!pwl_sku_supported())
+                return PWL_DEVICE_TYPE_UNKNOWN;
+            PWL_LOG_INFO("Module not found after %d s, still waiting (supported SKU)", waited);
+            next_report = waited + PWL_DEVICE_WAIT_LOG_SEC;
+        }
+        g_usleep(1000*1000*PWL_DEVICE_WAIT_POLL_SEC);
+        waited += PWL_DEVICE_WAIT_POLL_SEC;
     }
-    return PWL_DEVICE_TYPE_UNKNOWN;
 }
 
 gboolean cond_wait(pthread_mutex_t *mutex, pthread_cond_t *cond, gint wait_time) {
