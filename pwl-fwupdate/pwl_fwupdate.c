@@ -100,6 +100,14 @@ gboolean gb_set_oem_pri_ver_ret = FALSE;
 gboolean gb_set_pref_carrier_ret = FALSE;
 gboolean g_is_get_fw_ver = FALSE;
 gboolean g_retry_fw_update = FALSE;
+// An update attempt given up because the module did not say which firmware
+// it runs: when to try again (0 = none pending), how the attempt was started,
+// and how many such retries this episode has used.
+#define UNREADABLE_FW_RETRY_DELAY_SEC  30
+#define UNREADABLE_FW_RETRY_LIMIT      10
+time_t   g_unreadable_retry_at = 0;
+gboolean g_unreadable_retry_startup = FALSE;
+gint     g_unreadable_retry_count = 0;
 gboolean g_has_update_include_fw_img = FALSE;
 gboolean g_has_update_include_oem_img = FALSE;
 gboolean g_only_flash_oem_image = FALSE;
@@ -833,6 +841,12 @@ void* monitor_retry_func(void *args) {
             g_retry_fw_update = FALSE;
             PWL_LOG_INFO("Retry firmware update...");
             start_update_process(FALSE, FALSE);
+        }
+        if (g_unreadable_retry_at != 0 && time(NULL) >= g_unreadable_retry_at) {
+            g_unreadable_retry_at = 0;
+            PWL_LOG_INFO("Retry firmware update: module fw version was not readable (retry %d/%d)",
+                         g_unreadable_retry_count, UNREADABLE_FW_RETRY_LIMIT);
+            start_update_process(g_unreadable_retry_startup, FALSE);
         }
     }
 
@@ -3379,7 +3393,7 @@ int start_update_process(gboolean is_startup, gboolean efs_recovery_mode) {
         // re-enumerates the AT channel is not up yet (WCL, 2026-09-23 --
         // "pwl find mbim port fail!" then "Is IOT FW: 0"). Ask a few times,
         // and if it still cannot be read abort this attempt without the
-        // mismatch verdict; the retry path asks again later.
+        // mismatch verdict and schedule another one.
         int iot_fw = PWL_IOT_UNKNOWN;
         for (int attempt = 0; attempt < 3; attempt++) {
             iot_fw = pwl_module_fw_category();
@@ -3391,10 +3405,26 @@ int start_update_process(gboolean is_startup, gboolean efs_recovery_mode) {
         gboolean iot_ssid = is_iot_ssid();
         PWL_LOG_DEBUG("Is IOT FW: %d, Is IOT SSID: %d", iot_fw, iot_ssid);
         if (iot_fw == PWL_IOT_UNKNOWN) {
-            PWL_LOG_ERR("Cannot read module fw version, abort this FW update attempt");
+            // Nothing else brings this attempt back: the boot-time call
+            // returns into the main loop, and the other retry path
+            // (g_retry_fw_update) only fires on a madpt restart. A host
+            // rebooted while the image was being written leaves the module
+            // on its old firmware, so without this it stayed there until
+            // the next boot (WCL, 2026-10-12).
+            if (g_unreadable_retry_count < UNREADABLE_FW_RETRY_LIMIT) {
+                g_unreadable_retry_count++;
+                g_unreadable_retry_startup = is_startup;
+                g_unreadable_retry_at = time(NULL) + UNREADABLE_FW_RETRY_DELAY_SEC;
+                PWL_LOG_ERR("Cannot read module fw version, abort this FW update attempt; retry %d/%d in %d s",
+                            g_unreadable_retry_count, UNREADABLE_FW_RETRY_LIMIT, UNREADABLE_FW_RETRY_DELAY_SEC);
+            } else {
+                PWL_LOG_ERR("Cannot read module fw version, abort this FW update attempt; gave up after %d retries",
+                            UNREADABLE_FW_RETRY_LIMIT);
+            }
             close_progress_msg_box(CLOSE_TYPE_RETRY);
             return -1;
         }
+        g_unreadable_retry_count = 0;
         if ((iot_fw == PWL_IOT_YES) != iot_ssid) {
             PWL_LOG_ERR("SSID & FW not match, abort FW update");
             close_progress_msg_box(CLOSE_TYPE_ERROR);
@@ -5603,7 +5633,9 @@ int parse_checksum(char *checksum_file, char *key_image, char *checksum_value) {
 }
 
 gint post_message_queue_action(int action) {
-    int err, ret, retry, cid = 0;
+    // 'retry' was uninitialised (undefined loop count); 'ret' is only assigned
+    // by the timedwait below.
+    int err = 0, ret = 0, retry = 0, cid = 0;
     char retry_msg[128] = {0};
     while (retry < PWL_FW_UPDATE_RETRY_LIMIT) {
         err = 0;
@@ -5652,8 +5684,13 @@ gint post_message_queue_action(int action) {
 
         if (DEBUG) PWL_LOG_DEBUG("CID: %s, Status: %d", cid_name[g_pwl_cid_map[cid].pwl_cid], g_pwl_cid_map[cid].status);
 
-        if (ret == ETIMEDOUT || ret != 0 || g_pwl_cid_map[cid].status == PWL_CID_STATUS_ERROR) {
-            PWL_LOG_ERR("%s", retry_msg);
+        // A reply carrying TIMEOUT or BUSY is a failed command, not a
+        // success: madpt answers GET_ATI with status TIMEOUT when the AT
+        // channel is unresponsive, and treating that as OK left g_sn/g_imei
+        // empty and armed the EFS (golden QCN) recovery on a healthy module.
+        if (ret == ETIMEDOUT || ret != 0 ||
+            g_pwl_cid_map[cid].status != PWL_CID_STATUS_OK) {
+            PWL_LOG_ERR("%s (status %d)", retry_msg, g_pwl_cid_map[cid].status);
             err = 1;
         }
         pthread_mutex_unlock(&g_mutex);
@@ -5813,9 +5850,12 @@ gint main( int Argc, char **Argv )
         goto PREPARE_ERROR;
     }
 
-    // Get SN and IMEI to check if has been EFS corrupt
-    if (post_message_queue_action(MESSAGE_QUEUE_ACTION_GET_ATI_INFO) == RET_OK) {
-        get_sn_and_imei();
+    // Get SN and IMEI to check if has been EFS corrupt. Only a successful
+    // ATI read may trigger the recovery: an empty/failed read (AT channel
+    // down, module still booting) says nothing about the EFS, and flashing
+    // the golden QCN on that evidence wipes a healthy module's EFS.
+    if (post_message_queue_action(MESSAGE_QUEUE_ACTION_GET_ATI_INFO) == RET_OK &&
+        get_sn_and_imei() == RET_OK) {
         if (strlen(g_sn) == 0 || strlen(g_imei) == 0) {
             post_message_queue_action(MESSAGE_QUEUE_ACTION_GET_BACKUP_SN_IMEI);
 
@@ -5832,7 +5872,7 @@ gint main( int Argc, char **Argv )
                 PWL_LOG_ERR("Backup SN/IMEI error!");
         }
     } else {
-        PWL_LOG_DEBUG("Can't get ati info, abort EFS corrupt check.");
+        PWL_LOG_ERR("Can't get ati info, abort EFS corrupt check.");
         efs_recovery_mode = FALSE;
     }
 
