@@ -21,6 +21,9 @@
 #include "common.h"
 #include "pwl_mbimdeviceadpt.h"
 
+// How long a command waits for an open that is still in flight.
+#define MBIM_OPEN_INFLIGHT_WAIT_MS 8000
+
 pthread_mutex_t g_device_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_device_cond = PTHREAD_COND_INITIALIZER;
 
@@ -99,8 +102,15 @@ void pwl_mbimdeviceadpt_at_req(madpt_mbim_intf_t intf, char *command, mbim_at_re
     // re-initialised the device again, and madpt never got out of the loop
     // ("Set preferred carrier fail" after a flash, test-9 2026-09-24 and
     // 2026-10-01). So give an in-flight open a few seconds first.
+    //
+    // A module that is slow to answer takes about 5 s to open through the
+    // proxy (EXM-G1 on 50.43/50.50, 2026-10-07; WCL's EXM-G1A after a
+    // downgrade interrupted by a host reboot, 2026-10-12). A 3 s wait failed
+    // the command before that open finished, the second failure re-initialised
+    // the device and cancelled the open, and madpt never opened at all. Wait
+    // up to MBIM_OPEN_INFLIGHT_WAIT_MS.
     if (g_cancellable != NULL && !g_atomic_int_get(&g_device_opened)) {
-        for (int i = 0; i < 30 && !g_atomic_int_get(&g_device_opened); i++)
+        for (int i = 0; i < MBIM_OPEN_INFLIGHT_WAIT_MS / 100 && !g_atomic_int_get(&g_device_opened); i++)
             g_usleep(100 * 1000);
     }
     if (g_device == NULL || !g_atomic_int_get(&g_device_opened)) {
@@ -188,8 +198,10 @@ static void device_new_cb(GObject *unused, GAsyncResult *res) {
         return;
     }
 
+    // Same open budget as pwl_core: a 4 s budget never let a module that
+    // needs about 5 s open at all (see pwl_mbimdeviceadpt_at_req()).
     mbim_device_open_full(g_device, MBIM_DEVICE_OPEN_FLAGS_PROXY,
-                         (PWL_CMD_TIMEOUT_SEC - 1), g_cancellable,
+                         PWL_OPEN_MBIM_TIMEOUT_SEC, g_cancellable,
                          (GAsyncReadyCallback) device_open_cb, NULL);
 }
 
