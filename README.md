@@ -233,3 +233,14 @@ To install services
       containing "OK" (about 8 %) was cut short and the unlock failed.
     - Package: depend on libmbim-glib4 >= 1.32, and conflict with / replace
       Canonical's split pwl-* packages, which install the same /opt/pwl.
+
+- version: 4.7.11
+    - FCC unlock: handle the AT*BAUTH? answer with or without line breaks
+      in the challenge (firmware 07.64, 50.50 and 50.51 send it on one
+      line, which made 4.7.10 send an empty AT*BAUTH=).
+    - FCC unlock: do not send the challenge when the decrypt gives no
+      output.
+    - Recover from a host reboot in the middle of a firmware update: keep
+      waiting for a module that is still updating, retry an unreadable
+      firmware version, give madpt a 30 s MBIM open, and do not treat an
+      AT timeout as success.
